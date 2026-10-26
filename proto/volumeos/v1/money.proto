@@ -1,0 +1,25 @@
+syntax = "proto3";
+package volumeos.v1;
+import "volumeos/v1/common.proto";
+
+// Kafka: money.events. A posting mirror only; TigerBeetle remains the balance store.
+message PostingRequest {
+  EventEnvelope envelope = 1;
+  string debit_account = 2;
+  string credit_account = 3;
+  string amount_minor = 4; // base-10 unsigned u128; avoids uint64 overflow
+  bool two_phase = 5;
+  string currency = 6;     // ISO 4217: NGN or USD in v1
+  string memo = 7;
+}
+
+message PostingMirror {
+  EventEnvelope envelope = 1;
+  string transfer_id = 2;
+  string debit_account = 3;
+  string credit_account = 4;
+  string amount_minor = 5;
+  string currency = 6;
+  string state = 7;        // pending|posted|voided
+  int64 ledger_ts_unix = 8;
+}
