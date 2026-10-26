@@ -39,6 +39,22 @@ spec:
               valueFrom: {configMapKeyRef: {name: campaign-worker, key: tb-adapter-url}}
             - name: CAMPAIGN_DISPATCH_URL
               valueFrom: {configMapKeyRef: {name: campaign-worker, key: campaign-dispatch-url}}
+            - name: IDENTITY_ADMIN_URL
+              valueFrom: {configMapKeyRef: {name: campaign-worker, key: identity-admin-url}}
+            - name: TENANCY_URL
+              valueFrom: {configMapKeyRef: {name: campaign-worker, key: tenancy-url}}
+            - name: LISTMONK_ADMIN_URL
+              valueFrom: {configMapKeyRef: {name: campaign-worker, key: listmonk-admin-url}}
+            - name: POSTIZ_PROVISIONER_URL
+              valueFrom: {configMapKeyRef: {name: campaign-worker, key: postiz-provisioner-url}}
+            - name: MESSAGING_URL
+              valueFrom: {configMapKeyRef: {name: campaign-worker, key: messaging-url}}
+            - name: VOLUMEOS_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: campaign-worker, key: service-token}}
+            - name: LISTMONK_ADMIN_USER
+              valueFrom: {secretKeyRef: {name: campaign-worker, key: listmonk-admin-user}}
+            - name: LISTMONK_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: campaign-worker, key: listmonk-admin-password}}
           resources: {requests: {cpu: 200m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
           securityContext:
             allowPrivilegeEscalation: false
