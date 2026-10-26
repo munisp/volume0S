@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: svc-provisioning
+  namespace: core
+  labels: {app.kubernetes.io/name: svc-provisioning, app.kubernetes.io/part-of: volumeos}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-provisioning
+  namespace: core
+  labels: {app.kubernetes.io/name: svc-provisioning, app.kubernetes.io/part-of: volumeos}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app.kubernetes.io/name: svc-provisioning}}
+  strategy:
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: svc-provisioning, app.kubernetes.io/part-of: volumeos}
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: svc-provisioning
+        dapr.io/metrics-port: "9090"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: svc-provisioning
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: svc-provisioning
+          image: ghcr.io/munisp/svc-provisioning:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080, name: http}]
+          env:
+            - {name: PORT, value: "8080"}
+            - {name: DAPR_HTTP_URL, value: "http://127.0.0.1:3500"}
+            - name: KEYCLOAK_ADMIN_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: keycloak-admin-url}}
+            - name: KEYCLOAK_ADMIN_TOKEN_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: keycloak-admin-token-url}}
+            - name: POSTIZ_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: postiz-url}}
+            - name: POSTIZ_SECRET_STORE
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: postiz-secret-store}}
+            - name: VOLUMEOS_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: svc-provisioning, key: service-token}}
+            - name: KEYCLOAK_ADMIN_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: svc-provisioning, key: keycloak-admin-client-id}}
+            - name: KEYCLOAK_ADMIN_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: svc-provisioning, key: keycloak-admin-client-secret}}
+            - name: DAPR_API_TOKEN
+              valueFrom: {secretKeyRef: {name: svc-provisioning, key: dapr-api-token, optional: true}}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-provisioning
+  namespace: core
+  labels: {app.kubernetes.io/name: svc-provisioning, app.kubernetes.io/part-of: volumeos}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: svc-provisioning}
+  ports: [{port: 80, targetPort: http, name: http}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: svc-provisioning
+  namespace: core
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: svc-provisioning}}
