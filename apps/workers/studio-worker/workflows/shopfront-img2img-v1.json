@@ -1,0 +1,55 @@
+{
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 424242,
+      "steps": 28,
+      "cfg": 6.5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 0.65,
+      "model": ["4", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["12", 0]
+    }
+  },
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {"ckpt_name": "{{checkpoint}}"}
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "professional Nigerian ecommerce product photography, preserve product identity and label, clean studio lighting, accurate materials: {{materials}}, dimensions: {{dimensions}}, optional price text: {{price_text}}",
+      "clip": ["4", 1]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "distorted product, changed label, misspelled text, watermark, extra objects, blurry, low resolution",
+      "clip": ["4", 1]
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {"samples": ["3", 0], "vae": ["4", 2]}
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {"filename_prefix": "volumeos/{{tenant_id}}/{{pack_id}}", "images": ["8", 0]}
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {"image": "{{source_image}}", "upload": true}
+  },
+  "11": {
+    "class_type": "VAEEncode",
+    "inputs": {"pixels": ["10", 0], "vae": ["4", 2]}
+  },
+  "12": {
+    "class_type": "RepeatLatentBatch",
+    "inputs": {"samples": ["11", 0], "amount": {{image_count}}}
+  }
+}
