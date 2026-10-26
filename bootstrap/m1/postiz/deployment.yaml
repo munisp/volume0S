@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postiz
+  namespace: core
+  labels: {app.kubernetes.io/name: postiz, app.kubernetes.io/part-of: volumeos}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postiz-uploads
+  namespace: core
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postiz
+  namespace: core
+  labels: {app.kubernetes.io/name: postiz, app.kubernetes.io/part-of: volumeos}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: postiz}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postiz
+  namespace: core
+  labels: {app.kubernetes.io/name: postiz, app.kubernetes.io/part-of: volumeos}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app.kubernetes.io/name: postiz}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: postiz, app.kubernetes.io/part-of: volumeos}
+    spec:
+      serviceAccountName: postiz
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: postiz
+          image: ghcr.io/gitroomhq/postiz-app:v1.3.0
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 5000}]
+          env:
+            - {name: FRONTEND_URL, value: http://postiz.core.svc.cluster.local}
+            - {name: NEXT_PUBLIC_BACKEND_URL, value: http://postiz.core.svc.cluster.local/api}
+            - {name: BACKEND_INTERNAL_URL, value: http://postiz.core.svc.cluster.local}
+            - {name: UPLOAD_DIRECTORY, value: /uploads}
+            - {name: NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY, value: /uploads}
+            - {name: NX_ADD_PLUGINS, value: "false"}
+            - {name: IS_GENERAL, value: "true"}
+            - {name: DISABLE_REGISTRATION, value: "true"}
+            - {name: STORAGE_PROVIDER, value: local}
+            - {name: RUN_CRON, value: "true"}
+          envFrom:
+            - secretRef: {name: postiz}
+          readinessProbe: {tcpSocket: {port: http}, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 12}
+          livenessProbe: {tcpSocket: {port: http}, periodSeconds: 30, timeoutSeconds: 3, failureThreshold: 3}
+          resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "2", memory: 3Gi}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: uploads, mountPath: /uploads}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: uploads
+          persistentVolumeClaim: {claimName: postiz-uploads}
+        - {name: tmp, emptyDir: {}}
