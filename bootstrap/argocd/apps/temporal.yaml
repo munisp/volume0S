@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: temporal
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: volumeos
+  source:
+    repoURL: https://github.com/temporalio/helm-charts.git
+    targetRevision: v1.22.4
+    path: .
+    helm:
+      values: |
+        server:
+          replicaCount: 1
+        web:
+          enabled: true
+        admintools:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff: {duration: 15s, factor: 2, maxDuration: 3m}
