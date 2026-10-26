@@ -1,0 +1,11 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    GO_PACKAGE_PREFIX:
+      default: github.com/munisp/volume0S/gen/go
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: ../gen/go
+  - remote: buf.build/grpc/go
+    out: ../gen/go
