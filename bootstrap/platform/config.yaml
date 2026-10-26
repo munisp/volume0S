@@ -17,6 +17,20 @@ data:
   ai-gateway-url: http://svc-ai-gateway.core.svc.cluster.local
   tb-adapter-url: http://tb-adapter.core.svc.cluster.local
   campaign-dispatch-url: http://svc-campaigns.core.svc.cluster.local
+  identity-admin-url: http://svc-identity-admin.core.svc.cluster.local
+  tenancy-url: http://svc-tenancy.core.svc.cluster.local
+  listmonk-admin-url: http://listmonk.core.svc.cluster.local
+  postiz-provisioner-url: http://svc-postiz-provisioner.core.svc.cluster.local
+  messaging-url: http://svc-campaigns.core.svc.cluster.local
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: studio-worker
+  namespace: workers
+data:
+  # Set this to a reviewed internal GPU runtime; there is no public ComfyUI endpoint.
+  comfyui-url: http://comfyui.ai.svc.cluster.local:8188
 ---
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
