@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: volumeos-identity
+  namespace: core
+data:
+  issuer: https://keycloak.sec.svc.cluster.local/realms/volumeos
+  audience: core-services
+  jwks-url: https://keycloak.sec.svc.cluster.local/realms/volumeos/protocol/openid-connect/certs
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: campaign-worker
+  namespace: workers
+data:
+  ai-gateway-url: http://svc-ai-gateway.core.svc.cluster.local
+  tb-adapter-url: http://tb-adapter.core.svc.cluster.local
+  campaign-dispatch-url: http://svc-campaigns.core.svc.cluster.local
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: svc-tenancy
+  namespace: core
+spec:
+  http:
+    - name: tenancy
+      match:
+        hosts: [api.volumeos.example.com]
+        paths: [/v1/tenants/*, /v1/workspaces, /v1/subscriptions]
+      upstreams:
+        - name: svc-tenancy
+      # svc-tenancy independently verifies RS256 issuer/audience and tenant_id.
+      # Add APISIX openid-connect after the Keycloak client secret is delivered by SOPS.
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixUpstream
+metadata:
+  name: svc-tenancy
+  namespace: core
+spec:
+  scheme: http
+  loadbalancer: {type: roundrobin}
+  nodes:
+    - {host: svc-tenancy.core.svc.cluster.local, port: 80, weight: 100}
