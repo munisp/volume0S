@@ -6,6 +6,7 @@ only in tests. No provider call is made when any guard is unavailable.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -76,6 +77,8 @@ def validate_dispatch(value: DispatchRequest) -> None:
         raise ApplicationError("unsupported M1 provider channel", non_retryable=True)
     if not value.content.strip():
         raise ApplicationError("approved content is required", non_retryable=True)
+    if value.channel == "email" and (value.recipient is None or not value.recipient.strip()):
+        raise ApplicationError("email recipient is required for suppression enforcement", non_retryable=True)
     if value.scheduled_at and value.scheduled_at.tzinfo is None:
         raise ApplicationError("scheduled_at must include a timezone", non_retryable=True)
 
@@ -122,6 +125,9 @@ class HTTPDispatchPolicy:
     async def authorize(self, value: DispatchRequest) -> None:
         payload = {"channel": value.channel, "recipient": value.recipient}
         headers = {"X-VolumeOS-Tenant": value.tenant_id, "Idempotency-Key": f"authorize:{value.campaign_id}:{value.channel}"}
+        token = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         if self._client is None:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(self._base_url + "/v1/dispatch-authorizations", json=payload, headers=headers)
@@ -131,6 +137,50 @@ class HTTPDispatchPolicy:
         decision = response.json()
         if decision.get("allowed") is not True:
             raise ApplicationError("dispatch denied by kill switch or suppression registry", non_retryable=True)
+
+
+class HTTPIdempotencyStore:
+    """Persistent tenant-scoped result store backed by svc-tenancy/PostgreSQL."""
+
+    def __init__(self, base_url: str, client: httpx.AsyncClient | None = None):
+        if not base_url.strip():
+            raise ValueError("idempotency base_url is required")
+        self._base_url = base_url.rstrip("/") + "/v1/dispatch-results"
+        self._client = client
+
+    def _headers(self, key: str) -> dict[str, str]:
+        tenant_id, separator, _ = key.partition(":")
+        if not separator or not TENANT_RE.fullmatch(tenant_id):
+            raise ApplicationError("idempotency key must be tenant scoped", non_retryable=True)
+        headers = {"X-VolumeOS-Tenant": tenant_id, "Idempotency-Key": key}
+        token = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    async def _request(self, method: str, **kwargs: Any) -> httpx.Response:
+        if self._client is None:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                return await client.request(method, self._base_url, **kwargs)
+        return await self._client.request(method, self._base_url, **kwargs)
+
+    async def get(self, key: str) -> ProviderResult | None:
+        response = await self._request("GET", headers=self._headers(key), params={"key": key})
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        body = response.json()
+        return ProviderResult(
+            provider_id=str(body["provider_id"]), cost_minor=int(body["cost_minor"]),
+            currency=str(body["currency"]),
+        )
+
+    async def put(self, key: str, result: ProviderResult) -> None:
+        response = await self._request("PUT", headers=self._headers(key), json={
+            "key": key, "provider_id": result.provider_id,
+            "cost_minor": result.cost_minor, "currency": result.currency,
+        })
+        response.raise_for_status()
 
 
 class DaprUsageSink:
@@ -189,19 +239,57 @@ class ListMonkProvider:
 
 
 class PostizProvider:
-    def __init__(self, base_url: str, api_key: str, client: httpx.AsyncClient | None = None):
-        if not base_url.strip() or not api_key:
-            raise ValueError("Postiz URL and API key are required")
+    """Postiz scheduler with production tenant-scoped Dapr credential lookup.
+
+    A static api_key exists for isolated adapter tests only. Production construction
+    must provide dapr_url and secret_store instead of a shared provider credential.
+    """
+
+    def __init__(
+        self, base_url: str, api_key: str = "", client: httpx.AsyncClient | None = None,
+        dapr_url: str = "", secret_store: str = "",
+    ):
+        if not base_url.strip():
+            raise ValueError("Postiz URL is required")
+        if api_key and dapr_url:
+            raise ValueError("use either a test API key or Dapr tenant credentials, not both")
+        if not api_key and (not dapr_url.strip() or not secret_store.strip()):
+            raise ValueError("Dapr URL and secret store are required for tenant credentials")
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
+        self._dapr_url = dapr_url.rstrip("/")
+        self._secret_store = secret_store
         self._client = client
+
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        kwargs.setdefault("timeout", 30.0)
+        if self._client is None:
+            async with httpx.AsyncClient() as client:
+                return await client.request(method, url, **kwargs)
+        return await self._client.request(method, url, **kwargs)
+
+    async def _tenant_api_key(self, tenant_id: str) -> str:
+        if self._api_key:
+            return self._api_key
+        secret_name = f"postiz-{tenant_id}-api-key"
+        headers = {}
+        if token := os.environ.get("DAPR_API_TOKEN"):
+            headers["dapr-api-token"] = token
+        response = await self._request(
+            "GET", f"{self._dapr_url}/v1.0/secrets/{self._secret_store}/{secret_name}", headers=headers,
+        )
+        response.raise_for_status()
+        secrets = response.json()
+        if not isinstance(secrets, dict) or not isinstance(secrets.get(secret_name), str) or not secrets[secret_name]:
+            raise ApplicationError("tenant Postiz credential is missing", non_retryable=True)
+        return secrets[secret_name]
 
     async def send(self, value: DispatchRequest, idempotency_key: str) -> ProviderResult:
         if not value.postiz_integration_id or value.scheduled_at is None:
             raise ApplicationError("Postiz integration and schedule are required", non_retryable=True)
         when = value.scheduled_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         headers = {
-            "Authorization": self._api_key, "Idempotency-Key": idempotency_key,
+            "Authorization": await self._tenant_api_key(value.tenant_id), "Idempotency-Key": idempotency_key,
             "X-VolumeOS-Tenant": value.tenant_id,
         }
         payload = {
