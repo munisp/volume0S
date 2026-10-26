@@ -1,0 +1,11 @@
+[package]
+name = "volumeos-tb-adapter"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "TigerBeetle two-phase reservation contract and deterministic state machine"
+
+[lib]
+name = "volumeos_tb_adapter"
+path = "src/lib.rs"
