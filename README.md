@@ -2,7 +2,7 @@
 
 Open-source-first operating platform for the Naira Volume Playbook: multi-tenant service delivery, prepaid operations, durable workflows, and geospatial market intelligence for Nigerian MSMEs.
 
-This repository currently implements the **M0 foundation and a tenancy/campaign vertical slice**. It does not claim that the later money, lakehouse, AI, or operator-console milestones are complete.
+This repository currently implements the **M0 foundation plus an M1 offer, messaging, onboarding, and Studio vertical slice**. It does not claim that M1 staging acceptance or the later money, lakehouse, AI-runtime, security-operations, or operator-console milestones are complete.
 
 ## Implemented
 
@@ -10,20 +10,26 @@ This repository currently implements the **M0 foundation and a tenancy/campaign 
 - **Isolation and identity:** RS256 JWT validation against Keycloak JWKS, issuer/audience/expiry enforcement, `tenant_id` on every scoped request, role checks, PostgreSQL row-level security, and cross-tenant tests. Header authentication is a development-only opt-in and is rejected in production.
 - **Persistence:** PostgreSQL migrations executed under an advisory lock, per-tenant transactions, no derived financial balances in PostgreSQL.
 - **Campaign orchestration (Python/Temporal):** draft → explicit human approval signal → reserve → dispatch → post, with a 24-hour approval timeout and void-on-failure compensation. Activities use real HTTP endpoints, idempotency keys, tenant scope, retries, and heartbeats; there are no simulated provider successes.
+- **M1 offer catalog (Go):** versioned NGN minor-unit prices and entitlements for Come-Back Engine, Content Cadence, Shopfront Studio, and the launch bundle. Supplied Q1 founding rates remain operator-review-required rather than being represented as currently active prices.
+- **Guarded messaging adapters:** ListMonk and Postiz clients with tenant bindings, approval validation, fail-closed suppression/kill-switch policy, persistent-store idempotency boundary, and usage-event emission.
+- **Onboarding saga:** identity → tenancy → ListMonk/Postiz initialization → activation → welcome, with reverse compensation. TigerBeetle account creation remains M2.
+- **Shopfront Studio:** versioned ComfyUI image graph, GPU job submission/polling, tenant-prefixed object storage, human QA approval/rejection, and WhatsApp/Jumia delivery formats. Rejected or timed-out packs are never delivered.
 - **Money contract (Rust):** deterministic two-phase reserve/post/void state machine with replay and idempotency-conflict tests. The live TigerBeetle transport is an M2 deliverable.
 - **Event contracts:** Protobuf envelopes and usage, money, lead, message-status, and audit-publish records; `money.events` is explicitly a mirror, not a ledger.
-- **GitOps:** pinned Argo CD applications, Dapr mTLS, APISIX + open-appsec, Strimzi Kafka and seven topics, PostgreSQL, Redis, MinIO buckets, Keycloak, OpenSearch, Temporal, observability, Kubecost, and OpenCTI.
+- **GitOps:** pinned Argo CD applications, Dapr mTLS, APISIX + open-appsec, Strimzi Kafka and seven topics, PostgreSQL, Redis, MinIO buckets, Keycloak, OpenSearch, Temporal, observability, Kubecost, and OpenCTI. M1 adds reviewed ListMonk and Postiz packaging; Wazuh is pinned but deliberately not auto-synced before its private secret overlay.
 - **Verification:** Go, Python, and Rust tests; static manifest/source checks; CI for tests, lint, and Kustomize rendering.
 
 ## Intentionally not represented as complete
 
-ListMonk, Postiz, and Wazuh are not deployed by the app-of-apps yet because the supplied scaffold referenced non-resolvable chart hosts. Their packaging must be selected, licence-reviewed, pinned, and tested before M1 rather than silently substituted with unreviewed charts. The APISIX-to-Keycloak OIDC plugin secret, TigerBeetle transport, Flink/Spark/Sedona/Ray workloads, DataFusion service, and console remain milestone work. The Rust reservation book is a contract model, not a running TigerBeetle adapter.
+ListMonk and Postiz are configured but still require staging health, tenant provisioning, provider, backup, and isolation acceptance. Wazuh is not active: the upstream base contains bootstrap credentials and certificate inputs that must be replaced through a reviewed private overlay. The ComfyUI GPU runtime and model licenses are operator-supplied acceptance items. The APISIX-to-Keycloak OIDC plugin secret, internal identity/Postiz provisioners, TigerBeetle transport, Flink/Spark/Sedona/Ray workloads, DataFusion service, and console remain milestone work. The Rust reservation book is a contract model, not a running TigerBeetle adapter.
 
 ## Repository layout
 
 ```text
 apps/core/svc-tenancy/          Go API, OIDC, PostgreSQL, migrations, tests
-apps/workers/campaign-worker/   Temporal workflow, activities, tests
+apps/workers/campaign-worker/   Campaign/onboarding workflows, messaging adapters, tests
+apps/workers/studio-worker/     ComfyUI workflow, QA gate, asset delivery, tests
+bootstrap/m1/postiz/           Reviewed upstream-image packaging with existing secrets
 libs-rust/tb-adapter/           Two-phase reservation contract and tests
 proto/volumeos/v1/              Backbone event contracts
 bootstrap/argocd/               AppProject, root app, pinned child applications
@@ -46,6 +52,10 @@ cd apps/core/svc-tenancy
 go test ./...
 
 cd ../../workers/campaign-worker
+python3 -m pip install -e '.[test]'
+PYTHONPATH=. python3 -m pytest
+
+cd ../studio-worker
 python3 -m pip install -e '.[test]'
 PYTHONPATH=. python3 -m pytest
 
@@ -79,6 +89,8 @@ export MINIO_ROOT_USER='…'
 export MINIO_ROOT_PASSWORD='…'
 export GRAFANA_ADMIN_PASSWORD='…'
 make configure-secrets
+# For the M1 slice, also supply the documented ListMonk/Postiz/service/S3 variables.
+# make configure-m1-secrets
 make apply-apps
 
 kubectl -n argocd get applications
@@ -96,4 +108,13 @@ Sync waves order resources during an Argo sync operation; they are **not** a sub
 - No direct public service endpoints; APISIX is the only ingress.
 - Restore drill evidence for PostgreSQL and MinIO; quarterly drill scheduled.
 
-See [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) for requirement-level status.
+### M1 acceptance still requiring real providers and a cluster
+
+- Complete the internal identity and Postiz provisioner endpoints used by onboarding; no fake success responses are included.
+- Verify per-tenant ListMonk lists/Postiz channels, double opt-in and suppression, provider webhooks, and zero sends while suspended.
+- Run the onboarding failure-injection drill and confirm every compensating action and optimistic tenancy transition.
+- Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48-hour turnaround.
+- Replace Wazuh bootstrap credentials/certificates before activation, then run the purple-team detection drill.
+- Reconcile provider cost with `usage.events` and publish M1 SLO dashboards.
+
+See [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) and [`docs/m1/REQUIREMENTS.md`](docs/m1/REQUIREMENTS.md) for requirement-level status.
