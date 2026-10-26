@@ -19,6 +19,12 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /v1/offers", func(w http.ResponseWriter, _ *http.Request) {
+		offers, bundles := OfferCatalog()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"price_book": "q1-founding-rate-reference", "offers": offers, "bundles": bundles,
+		})
+	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.store.Ready(r.Context()); err != nil {
 			writeError(w, http.StatusServiceUnavailable, "not_ready", "dependency check failed")
