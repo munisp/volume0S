@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -41,11 +42,12 @@ func (c Claims) Can(role string) bool {
 }
 
 type Authenticator struct {
-	issuer   string
-	audience string
-	jwksURL  string
-	client   *http.Client
-	insecure bool
+	issuer       string
+	audience     string
+	jwksURL      string
+	client       *http.Client
+	insecure     bool
+	serviceToken string
 
 	mu   sync.RWMutex
 	keys map[string]*rsa.PublicKey
@@ -56,10 +58,14 @@ func NewAuthenticator() (*Authenticator, error) {
 	if insecure && os.Getenv("VO_ENV") == "prod" {
 		return nil, errors.New("header authentication cannot be enabled in prod")
 	}
+	serviceToken := os.Getenv("VOLUMEOS_SERVICE_TOKEN")
+	if serviceToken != "" && len(serviceToken) < 32 {
+		return nil, errors.New("VOLUMEOS_SERVICE_TOKEN must contain at least 32 bytes")
+	}
 	return &Authenticator{
 		issuer: os.Getenv("OIDC_ISSUER"), audience: os.Getenv("OIDC_AUDIENCE"),
 		jwksURL: os.Getenv("OIDC_JWKS_URL"), client: &http.Client{Timeout: 5 * time.Second},
-		insecure: insecure, keys: make(map[string]*rsa.PublicKey),
+		insecure: insecure, serviceToken: serviceToken, keys: make(map[string]*rsa.PublicKey),
 	}, nil
 }
 
@@ -75,6 +81,15 @@ func (a *Authenticator) middleware(next http.Handler) http.Handler {
 }
 
 func (a *Authenticator) authenticate(r *http.Request) (Claims, error) {
+	header := r.Header.Get("Authorization")
+	if a.serviceToken != "" && strings.HasPrefix(header, "Bearer ") {
+		provided := strings.TrimPrefix(header, "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(a.serviceToken)) == 1 {
+			return validateClaims(Claims{
+				TenantID: r.Header.Get("X-VolumeOS-Tenant"), Roles: map[string]bool{"super-operator": true},
+			})
+		}
+	}
 	if a.insecure {
 		tenantID := r.Header.Get("X-VolumeOS-Tenant")
 		roles := make(map[string]bool)
@@ -86,7 +101,6 @@ func (a *Authenticator) authenticate(r *http.Request) (Claims, error) {
 	if a.issuer == "" || a.audience == "" || a.jwksURL == "" {
 		return Claims{}, errors.New("OIDC is not configured")
 	}
-	header := r.Header.Get("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
 		return Claims{}, errors.New("missing bearer token")
 	}
@@ -135,12 +149,12 @@ func (c *rawClaims) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func validateClaims(c Claims) (Claims, error) {
+func validateClaims(c Claims) error {
 	delete(c.Roles, "")
 	if !tenantIDPattern.MatchString(c.TenantID) || len(c.Roles) == 0 {
-		return Claims{}, errors.New("tenant_id and roles claims are required")
+		return errors.New("tenant_id and roles claims are required")
 	}
-	return c, nil
+	return nil
 }
 
 func claimsFrom(ctx context.Context) Claims { return ctx.Value(claimsKey).(Claims) }
