@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: volumeos-m0
+  namespace: argocd
+spec:
+  project: volumeos
+  source:
+    repoURL: https://github.com/munisp/volume0S.git
+    targetRevision: main
+    path: bootstrap/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
