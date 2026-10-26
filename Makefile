@@ -3,13 +3,14 @@ K ?= kubectl
 ARGOCD_CHART_VERSION := 10.11.6
 PYTHON ?= python3
 
-.PHONY: verify test apply-namespaces bootstrap-argocd apply-apps configure-secrets
+.PHONY: verify test apply-namespaces bootstrap-argocd apply-apps configure-secrets configure-m1-secrets
 verify:
 	$(PYTHON) scripts/verify_repo.py
 
 test: verify
 	cd apps/core/svc-tenancy && go test ./...
 	cd apps/workers/campaign-worker && $(PYTHON) -m pytest
+	cd apps/workers/studio-worker && $(PYTHON) -m pytest
 	cd libs-rust/tb-adapter && cargo test
 
 apply-namespaces: verify
@@ -38,4 +39,19 @@ configure-secrets:
 	@test -n "$(GRAFANA_ADMIN_PASSWORD)" || (echo "Set GRAFANA_ADMIN_PASSWORD"; exit 1)
 	$(K) -n ops create secret generic grafana-admin \
 		--from-literal=admin-user=admin --from-literal=admin-password="$(GRAFANA_ADMIN_PASSWORD)" \
+		--dry-run=client -o yaml | $(K) apply -f -
+
+configure-m1-secrets:
+	@test -n "$(LISTMONK_ADMIN_PASSWORD)" -a -n "$(POSTIZ_DATABASE_URL)" -a -n "$(POSTIZ_REDIS_URL)" -a -n "$(POSTIZ_JWT_SECRET)" || (echo "Set ListMonk/Postiz secret variables"; exit 1)
+	@test -n "$(VOLUMEOS_SERVICE_TOKEN)" -a -n "$(AWS_ACCESS_KEY_ID)" -a -n "$(AWS_SECRET_ACCESS_KEY)" || (echo "Set service-token and object-storage variables"; exit 1)
+	$(K) -n core create secret generic listmonk-admin --from-literal=admin-password="$(LISTMONK_ADMIN_PASSWORD)" \
+		--dry-run=client -o yaml | $(K) apply -f -
+	$(K) -n core create secret generic postiz --from-literal=DATABASE_URL="$(POSTIZ_DATABASE_URL)" \
+		--from-literal=REDIS_URL="$(POSTIZ_REDIS_URL)" --from-literal=JWT_SECRET="$(POSTIZ_JWT_SECRET)" \
+		--dry-run=client -o yaml | $(K) apply -f -
+	$(K) -n workers create secret generic campaign-worker --from-literal=service-token="$(VOLUMEOS_SERVICE_TOKEN)" \
+		--from-literal=listmonk-admin-user=admin --from-literal=listmonk-admin-password="$(LISTMONK_ADMIN_PASSWORD)" \
+		--dry-run=client -o yaml | $(K) apply -f -
+	$(K) -n workers create secret generic studio-worker --from-literal=AWS_ACCESS_KEY_ID="$(AWS_ACCESS_KEY_ID)" \
+		--from-literal=AWS_SECRET_ACCESS_KEY="$(AWS_SECRET_ACCESS_KEY)" --from-literal=AWS_DEFAULT_REGION=us-east-1 \
 		--dry-run=client -o yaml | $(K) apply -f -
