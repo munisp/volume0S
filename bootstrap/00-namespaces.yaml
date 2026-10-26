@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: edge, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: core, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: workers, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: data, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: ai, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: sec, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: ops, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: argocd, labels: {app.kubernetes.io/part-of: volumeos, pod-security.kubernetes.io/enforce: baseline}}
