@@ -1,0 +1,97 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: usage.events
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 2592000000
+    min.insync.replicas: 2
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: message.status
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 2592000000
+    min.insync.replicas: 2
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: census.pings
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 2592000000
+    min.insync.replicas: 2
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: lead.events
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 2592000000
+    min.insync.replicas: 2
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: money.events
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 220752000000
+    min.insync.replicas: 2
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: ai.jobs
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 2592000000
+    min.insync.replicas: 2
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: audit.publish
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 220752000000
+    min.insync.replicas: 2
