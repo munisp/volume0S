@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: wazuh
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    volumeos.io/activation: blocked-requires-private-secret-overlay
+spec:
+  project: volumeos
+  source:
+    repoURL: https://github.com/wazuh/wazuh-kubernetes.git
+    targetRevision: v4.14.9
+    path: wazuh
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: wazuh
+  # Deliberately no automated sync. The upstream base contains bootstrap secrets
+  # and certificate inputs; see docs/m1/COMPONENTS.md before manual activation.
+  syncPolicy:
+    retry:
+      limit: 3
+      backoff: {duration: 15s, factor: 2, maxDuration: 3m}
