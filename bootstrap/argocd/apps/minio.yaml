@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: minio
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: volumeos
+  source:
+    repoURL: https://charts.min.io/
+    targetRevision: 5.4.0
+    chart: minio
+    helm:
+      values: |
+        existingSecret: minio-root
+        replicas: 1
+        persistence:
+          enabled: true
+          size: 500Gi
+        buckets:
+          - {name: bronze, policy: none, purge: false}
+          - {name: silver, policy: none, purge: false}
+          - {name: gold, policy: none, purge: false, versioning: true}
+          - {name: assets, policy: none, purge: false}
+          - {name: archive, policy: none, purge: false}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff: {duration: 15s, factor: 2, maxDuration: 3m}
