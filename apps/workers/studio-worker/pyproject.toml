@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "volumeos-studio-worker"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "temporalio>=1.18,<2",
+  "httpx>=0.28,<1",
+  "boto3>=1.35,<2",
+  "Pillow>=11,<13",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9", "pytest-asyncio>=0.25,<1"]
+
+[tool.setuptools]
+py-modules = ["studio_main", "studio"]
+
+[tool.setuptools.data-files]
+"workflows" = ["workflows/*.json"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
