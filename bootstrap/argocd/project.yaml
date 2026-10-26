@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: volumeos
+  namespace: argocd
+spec:
+  description: VolumeOS M0 infrastructure and pinned upstream components
+  sourceRepos:
+    - https://github.com/munisp/volume0S.git
+    - https://github.com/fluvio-community/fluvio.git
+    - https://github.com/temporalio/helm-charts.git
+    - registry-1.docker.io/bitnamicharts
+    - https://charts.min.io/
+    - https://strimzi.io/charts/
+    - https://opensearch-project.github.io/helm-charts/
+    - https://dapr.github.io/helm-charts/
+    - https://charts.openappsec.io
+    - https://kubecost.github.io/cost-analyzer/
+    - https://prometheus-community.github.io/helm-charts
+    - https://devops-ia.github.io/helm-opencti
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+  clusterResourceWhitelist:
+    - {group: "*", kind: "*"}
+  namespaceResourceWhitelist:
+    - {group: "*", kind: "*"}
