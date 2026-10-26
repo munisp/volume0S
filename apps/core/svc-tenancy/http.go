@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type API struct {
@@ -38,6 +39,11 @@ func (a *API) routes() http.Handler {
 	mux.Handle("PUT /v1/tenants/current/outbound-suspension", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.suspendOutbound))))
 	mux.Handle("POST /v1/workspaces", a.auth.middleware(a.role("delivery", http.HandlerFunc(a.createWorkspace))))
 	mux.Handle("POST /v1/subscriptions", a.auth.middleware(a.role("sales", http.HandlerFunc(a.createSubscription))))
+	mux.Handle("POST /v1/dispatch-authorizations", a.auth.middleware(a.role("delivery", http.HandlerFunc(a.authorizeDispatch))))
+	mux.Handle("GET /v1/dispatch-results", a.auth.middleware(a.role("delivery", http.HandlerFunc(a.getDispatchResult))))
+	mux.Handle("PUT /v1/dispatch-results", a.auth.middleware(a.role("delivery", http.HandlerFunc(a.putDispatchResult))))
+	mux.Handle("PUT /v1/suppressions", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.setSuppression))))
+	mux.Handle("DELETE /v1/suppressions", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.setSuppression))))
 	return recoverPanic(logRequests(mux))
 }
 
@@ -127,7 +133,49 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subscription, err := a.store.CreateSubscription(r.Context(), claimsFrom(r.Context()).TenantID, input.Offer, input.Tier)
-	respond(w, r, http.StatusCreated, subscription, err)
+	respond(w, r, http.StatusOK, subscription, err)
+}
+
+func (a *API) authorizeDispatch(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Channel   string `json:"channel"`
+		Recipient string `json:"recipient"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	decision, err := a.store.AuthorizeDispatch(r.Context(), claimsFrom(r.Context()).TenantID, input.Channel, input.Recipient)
+	respond(w, r, http.StatusOK, decision, err)
+}
+
+func (a *API) setSuppression(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Channel   string `json:"channel"`
+		Recipient string `json:"recipient"`
+		Reason    string `json:"reason"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	err := a.store.SetSuppression(r.Context(), claimsFrom(r.Context()).TenantID, input.Channel, input.Recipient,
+		r.Method == http.MethodPut, input.Reason)
+	respond(w, r, http.StatusOK, map[string]string{"status": "updated"}, err)
+}
+
+func (a *API) getDispatchResult(w http.ResponseWriter, r *http.Request) {
+	result, err := a.store.GetDispatchResult(r.Context(), claimsFrom(r.Context()).TenantID, r.URL.Query().Get("key"))
+	respond(w, r, http.StatusOK, result, err)
+}
+
+func (a *API) putDispatchResult(w http.ResponseWriter, r *http.Request) {
+	var input DispatchResult
+	if !decode(w, r, &input) {
+		return
+	}
+	input.TenantID = claimsFrom(r.Context()).TenantID
+	input.RecordedAt = time.Time{}
+	result, err := a.store.PutDispatchResult(r.Context(), input)
+	respond(w, r, http.StatusOK, result, err)
 }
 
 func respond(w http.ResponseWriter, r *http.Request, status int, value any, err error) {
