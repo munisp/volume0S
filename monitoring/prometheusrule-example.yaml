@@ -1,0 +1,16 @@
+# SLO burn alert (NFR-2: campaign dispatch 99% per cycle). Wire receiver -> WhatsApp (OBS-6).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: volumeos-slo
+  namespace: ops
+spec:
+  groups:
+    - name: campaign-dispatch
+      rules:
+        - alert: DispatchErrorBudgetBurn
+          expr: sum(rate(http_requests_total{app="campaign-dispatch",code=~"5.."}[5m])) /
+                sum(rate(http_requests_total{app="campaign-dispatch"}[5m])) > 0.01
+          for: 15m
+          labels: {severity: page}
+          annotations: {summary: "Campaign dispatch error budget burning (BR-18)"}
