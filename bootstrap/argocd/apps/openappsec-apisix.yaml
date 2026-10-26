@@ -1,0 +1,40 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: openappsec-apisix
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: volumeos
+  source:
+    repoURL: https://charts.openappsec.io
+    targetRevision: 1.1.36
+    chart: open-appsec-apisix
+    helm:
+      values: |
+        rbac:
+          create: true
+        service:
+          type: LoadBalancer
+        appsec:
+          mode: standalone
+          persistence:
+            enabled: false
+        ingress-controller:
+          enabled: true
+          config:
+            ingressClass: appsec-apisix
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: edge
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff: {duration: 15s, factor: 2, maxDuration: 3m}
