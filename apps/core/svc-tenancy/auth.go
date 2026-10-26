@@ -149,12 +149,12 @@ func (c *rawClaims) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func validateClaims(c Claims) error {
+func validateClaims(c Claims) (Claims, error) {
 	delete(c.Roles, "")
 	if !tenantIDPattern.MatchString(c.TenantID) || len(c.Roles) == 0 {
-		return errors.New("tenant_id and roles claims are required")
+		return Claims{}, errors.New("tenant_id and roles claims are required")
 	}
-	return nil
+	return c, nil
 }
 
 func claimsFrom(ctx context.Context) Claims { return ctx.Value(claimsKey).(Claims) }
