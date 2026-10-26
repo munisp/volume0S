@@ -1,0 +1,32 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecost
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: volumeos
+  source:
+    repoURL: https://kubecost.github.io/cost-analyzer/
+    targetRevision: 2.9.7
+    chart: cost-analyzer
+    helm:
+      values: |
+        kubecostProductConfigs:
+          currencyCode: NGN
+        prometheus:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff: {duration: 15s, factor: 2, maxDuration: 3m}
