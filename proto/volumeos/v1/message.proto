@@ -1,0 +1,13 @@
+syntax = "proto3";
+package volumeos.v1;
+import "volumeos/v1/common.proto";
+import "volumeos/v1/usage.proto";
+
+message MessageStatus {
+  EventEnvelope envelope = 1;
+  string provider_message_id = 2;
+  string campaign_id = 3;
+  Channel channel = 4;
+  DeliveryStatus status = 5;
+  string provider_code = 6;
+}
