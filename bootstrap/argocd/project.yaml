@@ -4,7 +4,7 @@ metadata:
   name: volumeos
   namespace: argocd
 spec:
-  description: VolumeOS M0 infrastructure and pinned upstream components
+  description: VolumeOS infrastructure and pinned M0/M1 upstream components
   sourceRepos:
     - https://github.com/munisp/volume0S.git
     - https://github.com/fluvio-community/fluvio.git
@@ -18,6 +18,8 @@ spec:
     - https://kubecost.github.io/cost-analyzer/
     - https://prometheus-community.github.io/helm-charts
     - https://devops-ia.github.io/helm-opencti
+    - https://repo.helmforge.dev
+    - https://github.com/wazuh/wazuh-kubernetes.git
   destinations:
     - server: https://kubernetes.default.svc
       namespace: "*"
