@@ -1,0 +1,15 @@
+syntax = "proto3";
+package volumeos.v1;
+import "volumeos/v1/common.proto";
+
+message LeadEvent {
+  EventEnvelope envelope = 1;
+  string lead_id = 2;
+  string operation = 3; // upsert|converted|deleted
+  string corridor = 4;
+  string lga = 5;
+  string ward = 6;
+  string h3_r9 = 7;
+  string phone_hash = 8; // keyed hash; never raw phone on the backbone
+  string source = 9;
+}
