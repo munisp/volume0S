@@ -40,6 +40,10 @@ spec:
             - {name: VO_ENV, valueFrom: {fieldRef: {fieldPath: "metadata.labels['volumeos.io/env']"}}}
             - name: DATABASE_URL
               valueFrom: {secretKeyRef: {name: svc-tenancy, key: database-url}}
+            - name: VOLUMEOS_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: svc-tenancy, key: service-token}}
+            - name: SUPPRESSION_HMAC_SECRET
+              valueFrom: {secretKeyRef: {name: svc-tenancy, key: suppression-hmac-secret}}
             - name: OIDC_ISSUER
               valueFrom: {configMapKeyRef: {name: volumeos-identity, key: issuer}}
             - name: OIDC_AUDIENCE
