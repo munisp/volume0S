@@ -54,6 +54,20 @@ type Subscription struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type DispatchDecision struct {
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason"`
+}
+
+type DispatchResult struct {
+	Key        string    `json:"key"`
+	TenantID   string    `json:"tenant_id"`
+	ProviderID string    `json:"provider_id"`
+	CostMinor  int64     `json:"cost_minor"`
+	Currency   string    `json:"currency"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
 type Store interface {
 	Ready(context.Context) error
 	CreateTenant(context.Context, Tenant) error
@@ -62,6 +76,10 @@ type Store interface {
 	SetOutboundSuspended(context.Context, string, bool, string) (Tenant, error)
 	CreateWorkspace(context.Context, string, string) (Workspace, error)
 	CreateSubscription(context.Context, string, string, string) (Subscription, error)
+	AuthorizeDispatch(context.Context, string, string, string) (DispatchDecision, error)
+	SetSuppression(context.Context, string, string, string, bool, string) error
+	GetDispatchResult(context.Context, string, string) (DispatchResult, error)
+	PutDispatchResult(context.Context, DispatchResult) (DispatchResult, error)
 }
 
 var (
