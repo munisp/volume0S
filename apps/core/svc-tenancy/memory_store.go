@@ -9,11 +9,18 @@ import (
 
 // MemoryStore is explicitly for unit tests and local development only.
 type MemoryStore struct {
-	mu      sync.RWMutex
-	tenants map[string]Tenant
+	mu           sync.RWMutex
+	tenants      map[string]Tenant
+	dispatches   map[string]DispatchResult
+	suppressions map[string]string
 }
 
-func NewMemoryStore() *MemoryStore                 { return &MemoryStore{tenants: make(map[string]Tenant)} }
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		tenants: make(map[string]Tenant), dispatches: make(map[string]DispatchResult),
+		suppressions: make(map[string]string),
+	}
+}
 func (s *MemoryStore) Ready(context.Context) error { return nil }
 
 func cloneTenant(t Tenant) Tenant {
@@ -117,4 +124,108 @@ func (s *MemoryStore) CreateSubscription(_ context.Context, tenantID, offer, tie
 	t.Version++
 	s.tenants[tenantID] = t
 	return sub, nil
+}
+
+func normalizeRecipient(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+
+func suppressionKey(tenantID, channel, recipient string) string {
+	return tenantID + "\x00" + channel + "\x00" + normalizeRecipient(recipient)
+}
+
+func validMessagingChannel(channel string) bool {
+	switch channel {
+	case "email", "sms", "whatsapp", "social":
+		return true
+	default:
+		return false
+	}
+}
+
+func validCurrency(currency string) bool {
+	if len(currency) != 3 {
+		return false
+	}
+	for _, character := range currency {
+		if character < 'A' || character > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func validSuppressionInput(channel, recipient, reason string, suppressed bool) bool {
+	reason = strings.TrimSpace(reason)
+	return validMessagingChannel(channel) && normalizeRecipient(recipient) != "" && len(reason) <= 500 && (!suppressed || reason != "")
+}
+
+func (s *MemoryStore) AuthorizeDispatch(_ context.Context, tenantID, channel, recipient string) (DispatchDecision, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !validMessagingChannel(channel) || (channel != "social" && normalizeRecipient(recipient) == "") {
+		return DispatchDecision{}, ErrInvalidChange
+	}
+	tenant, ok := s.tenants[tenantID]
+	if !ok {
+		return DispatchDecision{}, ErrNotFound
+	}
+	if tenant.State != Active {
+		return DispatchDecision{Allowed: false, Reason: "tenant_not_active"}, nil
+	}
+	if tenant.OutboundSuspended {
+		return DispatchDecision{Allowed: false, Reason: "tenant_suspended"}, nil
+	}
+	if _, suppressed := s.suppressions[suppressionKey(tenantID, channel, recipient)]; suppressed {
+		return DispatchDecision{Allowed: false, Reason: "recipient_suppressed"}, nil
+	}
+	return DispatchDecision{Allowed: true, Reason: "authorized"}, nil
+}
+
+func (s *MemoryStore) SetSuppression(_ context.Context, tenantID, channel, recipient string, suppressed bool, reason string) error {
+	if !validSuppressionInput(channel, recipient, reason, suppressed) {
+		return ErrInvalidChange
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tenants[tenantID]; !ok {
+		return ErrNotFound
+	}
+	key := suppressionKey(tenantID, channel, recipient)
+	if suppressed {
+		s.suppressions[key] = strings.TrimSpace(reason)
+	} else {
+		delete(s.suppressions, key)
+	}
+	return nil
+}
+
+func (s *MemoryStore) GetDispatchResult(_ context.Context, tenantID, key string) (DispatchResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result, ok := s.dispatches[tenantID+"\x00"+key]
+	if !ok {
+		return DispatchResult{}, ErrNotFound
+	}
+	return result, nil
+}
+
+func (s *MemoryStore) PutDispatchResult(_ context.Context, value DispatchResult) (DispatchResult, error) {
+	if value.Key == "" || len(value.Key) > 512 || !tenantIDPattern.MatchString(value.TenantID) ||
+		strings.TrimSpace(value.ProviderID) == "" || len(value.ProviderID) > 512 || value.CostMinor < 0 || !validCurrency(value.Currency) {
+		return DispatchResult{}, ErrInvalidChange
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tenants[value.TenantID]; !ok {
+		return DispatchResult{}, ErrNotFound
+	}
+	key := value.TenantID + "\x00" + value.Key
+	if existing, ok := s.dispatches[key]; ok {
+		if existing.ProviderID != value.ProviderID || existing.CostMinor != value.CostMinor || existing.Currency != value.Currency {
+			return DispatchResult{}, ErrConflict
+		}
+		return existing, nil
+	}
+	value.RecordedAt = time.Now().UTC()
+	s.dispatches[key] = value
+	return value, nil
 }
