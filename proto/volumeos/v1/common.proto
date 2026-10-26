@@ -1,0 +1,12 @@
+syntax = "proto3";
+package volumeos.v1;
+
+// Required on every backbone event. Producers generate event_id before retrying.
+message EventEnvelope {
+  string event_id = 1;   // ULID; consumer idempotency key
+  string tenant_id = 2;  // empty only for platform-level events
+  string source = 3;
+  string schema = 4;
+  int64 ts_unix = 5;
+  string lineage_id = 6; // scrape run, import batch, workflow, or CDC position
+}
