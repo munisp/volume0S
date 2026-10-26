@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	_ "embed"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -16,7 +19,13 @@ import (
 //go:embed migrations/001_initial.sql
 var initialMigration string
 
-type PostgresStore struct{ pool *pgxpool.Pool }
+//go:embed migrations/002_messaging.sql
+var messagingMigration string
+
+type PostgresStore struct {
+	pool           *pgxpool.Pool
+	suppressionKey []byte
+}
 
 func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
@@ -29,7 +38,12 @@ func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, 
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
-	store := &PostgresStore{pool: pool}
+	suppressionKey := []byte(os.Getenv("SUPPRESSION_HMAC_SECRET"))
+	if len(suppressionKey) < 32 {
+		pool.Close()
+		return nil, errors.New("SUPPRESSION_HMAC_SECRET must contain at least 32 bytes")
+	}
+	store := &PostgresStore{pool: pool, suppressionKey: suppressionKey}
 	if err := store.migrate(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -52,16 +66,22 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return fmt.Errorf("create migration catalog: %w", err)
 	}
-	result, err := conn.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES ('001_initial') ON CONFLICT DO NOTHING`)
-	if err != nil {
-		return fmt.Errorf("record migration: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return nil
-	}
-	if _, err := conn.Exec(ctx, initialMigration); err != nil {
-		_, _ = conn.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version='001_initial'`)
-		return fmt.Errorf("apply 001_initial migration: %w", err)
+	migrations := []struct {
+		version string
+		sql     string
+	}{{"001_initial", initialMigration}, {"002_messaging", messagingMigration}}
+	for _, migration := range migrations {
+		result, err := conn.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT DO NOTHING`, migration.version)
+		if err != nil {
+			return fmt.Errorf("record migration %s: %w", migration.version, err)
+		}
+		if result.RowsAffected() == 0 {
+			continue
+		}
+		if _, err := conn.Exec(ctx, migration.sql); err != nil {
+			_, _ = conn.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version=$1`, migration.version)
+			return fmt.Errorf("apply %s migration: %w", migration.version, err)
+		}
 	}
 	return nil
 }
@@ -205,7 +225,7 @@ func (s *PostgresStore) CreateWorkspace(ctx context.Context, tenantID, name stri
 	}
 	err := s.tx(ctx, tenantID, func(tx pgx.Tx) error {
 		var state Lifecycle
-		if err := tx.QueryRow(ctx, "SELECT state FROM tenants WHERE id=$1", tenantID).Scan(&state); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT state FROM tenants WHERE id=$1`, tenantID).Scan(&state); err != nil {
 			return pgError(err)
 		}
 		if state == Offboarded {
@@ -224,7 +244,7 @@ func (s *PostgresStore) CreateSubscription(ctx context.Context, tenantID, offer,
 	}
 	err := s.tx(ctx, tenantID, func(tx pgx.Tx) error {
 		var state Lifecycle
-		if err := tx.QueryRow(ctx, "SELECT state FROM tenants WHERE id=$1", tenantID).Scan(&state); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT state FROM tenants WHERE id=$1`, tenantID).Scan(&state); err != nil {
 			return pgError(err)
 		}
 		if state == Offboarded {
@@ -234,4 +254,113 @@ func (s *PostgresStore) CreateSubscription(ctx context.Context, tenantID, offer,
 		return err
 	})
 	return sub, pgError(err)
+}
+
+func (s *PostgresStore) recipientDigest(recipient string) []byte {
+	mac := hmac.New(sha256.New, s.suppressionKey)
+	_, _ = mac.Write([]byte(normalizeRecipient(recipient)))
+	return mac.Sum(nil)
+}
+
+func (s *PostgresStore) AuthorizeDispatch(ctx context.Context, tenantID, channel, recipient string) (DispatchDecision, error) {
+	decision := DispatchDecision{}
+	if !validMessagingChannel(channel) || (channel != "social" && normalizeRecipient(recipient) == "") {
+		return decision, ErrInvalidChange
+	}
+	err := s.tx(ctx, tenantID, func(tx pgx.Tx) error {
+		var state Lifecycle
+		var suspended bool
+		if err := tx.QueryRow(ctx, `SELECT state,outbound_suspended FROM tenants WHERE id=$1`, tenantID).Scan(&state, &suspended); err != nil {
+			return err
+		}
+		switch {
+		case state != Active:
+			decision.Reason = "tenant_not_active"
+		case suspended:
+			decision.Reason = "tenant_suspended"
+		case channel != "social":
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM suppressions WHERE tenant_id=$1 AND channel=$2 AND recipient_digest=$3)`,
+				tenantID, channel, s.recipientDigest(recipient)).Scan(&exists); err != nil {
+				return err
+			}
+			if exists {
+				decision.Reason = "recipient_suppressed"
+			}
+		}
+		if decision.Reason == "" {
+			decision.Allowed, decision.Reason = true, "authorized"
+		}
+		return nil
+	})
+	return decision, pgError(err)
+}
+
+func (s *PostgresStore) SetSuppression(ctx context.Context, tenantID, channel, recipient string, suppressed bool, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if !validSuppressionInput(channel, recipient, reason, suppressed) {
+		return ErrInvalidChange
+	}
+	return pgError(s.tx(ctx, tenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)`, tenantID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+		if suppressed {
+			_, err := tx.Exec(ctx, `INSERT INTO suppressions(tenant_id,channel,recipient_digest,reason) VALUES ($1,$2,$3,$4)
+				ON CONFLICT (tenant_id,channel,recipient_digest) DO UPDATE SET reason=EXCLUDED.reason,created_at=now()`,
+				tenantID, channel, s.recipientDigest(recipient), reason)
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM suppressions WHERE tenant_id=$1 AND channel=$2 AND recipient_digest=$3`,
+			tenantID, channel, s.recipientDigest(recipient))
+		return err
+	}))
+}
+
+func (s *PostgresStore) GetDispatchResult(ctx context.Context, tenantID, key string) (DispatchResult, error) {
+	var result DispatchResult
+	if key == "" || len(key) > 512 {
+		return result, ErrInvalidChange
+	}
+	err := s.tx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT idempotency_key,tenant_id,provider_id,cost_minor,currency,recorded_at
+			FROM dispatch_results WHERE tenant_id=$1 AND idempotency_key=$2`, tenantID, key).Scan(
+			&result.Key, &result.TenantID, &result.ProviderID, &result.CostMinor, &result.Currency, &result.RecordedAt)
+	})
+	return result, pgError(err)
+}
+
+func (s *PostgresStore) PutDispatchResult(ctx context.Context, value DispatchResult) (DispatchResult, error) {
+	var result DispatchResult
+	if value.Key == "" || len(value.Key) > 512 || !tenantIDPattern.MatchString(value.TenantID) ||
+		strings.TrimSpace(value.ProviderID) == "" || len(value.ProviderID) > 512 || value.CostMinor < 0 || !validCurrency(value.Currency) {
+		return result, ErrInvalidChange
+	}
+	err := s.tx(ctx, value.TenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)`, value.TenantID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO dispatch_results(tenant_id,idempotency_key,provider_id,cost_minor,currency)
+			VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, value.TenantID, value.Key, value.ProviderID, value.CostMinor, value.Currency); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT idempotency_key,tenant_id,provider_id,cost_minor,currency,recorded_at
+			FROM dispatch_results WHERE tenant_id=$1 AND idempotency_key=$2`, value.TenantID, value.Key).Scan(
+			&result.Key, &result.TenantID, &result.ProviderID, &result.CostMinor, &result.Currency, &result.RecordedAt); err != nil {
+			return err
+		}
+		if result.ProviderID != value.ProviderID || result.CostMinor != value.CostMinor || result.Currency != value.Currency {
+			return ErrConflict
+		}
+		return nil
+	})
+	return result, pgError(err)
 }
