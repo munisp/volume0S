@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: listmonk
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+spec:
+  project: volumeos
+  source:
+    repoURL: https://repo.helmforge.dev
+    chart: listmonk
+    targetRevision: 1.2.3
+    helm:
+      values: |
+        replicaCount: 1
+        image:
+          repository: docker.io/listmonk/listmonk
+          tag: v6.2.0
+          pullPolicy: IfNotPresent
+        listmonk:
+          admin:
+            username: admin
+            existingSecret: listmonk-admin
+            existingSecretPasswordKey: admin-password
+        database:
+          mode: postgresql
+        postgresql:
+          enabled: true
+          architecture: standalone
+          auth:
+            database: listmonk
+            username: listmonk
+          standalone:
+            persistence: {enabled: true, size: 20Gi}
+        storage: {enabled: true, size: 20Gi, accessMode: ReadWriteOnce}
+        service: {type: ClusterIP, port: 80}
+        ingress: {enabled: false}
+        gatewayAPI: {enabled: false}
+        backup: {enabled: false}
+        resources:
+          requests: {cpu: 200m, memory: 256Mi}
+          limits: {cpu: "1", memory: 1Gi}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: core
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    retry:
+      limit: 3
+      backoff: {duration: 15s, factor: 2, maxDuration: 3m}
