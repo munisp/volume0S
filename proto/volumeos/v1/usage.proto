@@ -1,0 +1,19 @@
+syntax = "proto3";
+package volumeos.v1;
+import "volumeos/v1/common.proto";
+
+enum Channel { CHANNEL_UNSPECIFIED = 0; WHATSAPP = 1; SMS = 2; EMAIL = 3; SOCIAL = 4; VOICE = 5; }
+enum Direction { DIRECTION_UNSPECIFIED = 0; SEND = 1; RECEIVE = 2; }
+enum DeliveryStatus { DELIVERY_STATUS_UNSPECIFIED = 0; ACCEPTED = 1; SENT = 2; DELIVERED = 3; FAILED = 4; SUPPRESSED = 5; }
+
+// Kafka: usage.events, partition key tenant_id. Cost is always minor units.
+message UsageEvent {
+  EventEnvelope envelope = 1;
+  Channel channel = 2;
+  Direction direction = 3;
+  string campaign_id = 4;
+  uint64 count = 5;
+  uint64 cost_minor = 6;
+  string currency = 7;
+  DeliveryStatus status = 8;
+}
