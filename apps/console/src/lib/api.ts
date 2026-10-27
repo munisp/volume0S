@@ -1,4 +1,4 @@
-import type { Bundle, Offer, Subscription, Tenant, Workspace } from './types'
+import type { Bundle, CampaignSnapshot, Offer, StudioAssetResponse, StudioSnapshot, Subscription, Tenant, Workspace } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -53,8 +53,12 @@ export class VolumeOSApi {
     })
   }
 
+  campaigns() {
+    return this.request<{ campaigns: CampaignSnapshot[] }>(this.orchestratorUrl, '/v1/campaigns')
+  }
+
   startCampaign(input: { campaign_id: string; brief: string; amount_minor: number; currency: string; cycle_id: string }) {
-    return this.request(this.orchestratorUrl, '/v1/campaigns', { method: 'POST', body: input })
+    return this.request<{ status: string; campaign_id: string }>(this.orchestratorUrl, '/v1/campaigns', { method: 'POST', body: input })
   }
 
   approveCampaign(campaignId: string, approvalId: string) {
@@ -63,13 +67,21 @@ export class VolumeOSApi {
     })
   }
 
-  startStudioPack(input: Record<string, string>) {
-    return this.request(this.orchestratorUrl, '/v1/studio/packs', { method: 'POST', body: input })
+  studioPacks() {
+    return this.request<{ packs: StudioSnapshot[] }>(this.orchestratorUrl, '/v1/studio/packs')
   }
 
-  reviewStudioPack(packId: string, decision: 'approve' | 'reject', reason: string) {
+  startStudioPack(input: Record<string, string>) {
+    return this.request<{ status: string; pack_id: string }>(this.orchestratorUrl, '/v1/studio/packs', { method: 'POST', body: input })
+  }
+
+  studioAssets(packId: string) {
+    return this.request<StudioAssetResponse>(this.orchestratorUrl, `/v1/studio/packs/${encodeURIComponent(packId)}/assets`)
+  }
+
+  reviewStudioPack(packId: string, decision: 'approve' | 'reject', reason: string, manifestSha256: string) {
     return this.request(this.orchestratorUrl, `/v1/studio/packs/${encodeURIComponent(packId)}/review`, {
-      method: 'POST', body: { decision, reason },
+      method: 'POST', body: { decision, reason, manifest_sha256: manifestSha256 },
     })
   }
 

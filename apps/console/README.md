@@ -63,14 +63,15 @@ Implemented Core calls:
 - `PUT /v1/tenants/current/outbound-suspension`
 - `PUT` and `DELETE /v1/suppressions`
 
-Configurable orchestrator calls:
+Implemented orchestrator calls:
 
-- `POST /v1/campaigns`
+- `GET` and `POST /v1/campaigns`
 - `POST /v1/campaigns/{id}/approval`
-- `POST /v1/studio/packs`
+- `GET` and `POST /v1/studio/packs`
+- `GET /v1/studio/packs/{id}/assets`
 - `POST /v1/studio/packs/{id}/review`
 
-The orchestrator HTTP service, live campaign/Studio queue feeds, and actual QA object-delivery interface are not implemented by this static console. Submitted workflow records appear only in the current tab and are labeled as not refreshable. Actual image review must use the deployed asset interface before QA approval. These boundaries do not bypass Temporal approval or provider policy checks.
+The console reads live campaign and Studio state from the orchestrator's Temporal-backed feeds, refreshes after mutations and while visible online, and disables actions when current state is unavailable. Studio review loads actual QA images through short-lived signed URLs, with an explicit refresh action for failed or expired URLs. Approval submits the current manifest SHA-256 only after every image loads; the service and workflow validate the same hash again before delivery. These controls do not bypass Temporal approval or provider policy checks, and source-level tests are not proof of a deployed integration.
 
 ## PWA and privacy behavior
 
