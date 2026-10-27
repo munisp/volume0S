@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 from datetime import datetime, timezone
@@ -91,9 +92,9 @@ async def test_delivery_requires_human_approval(monkeypatch):
     Image.new("RGB", (100, 100), "blue").save(source, format="PNG")
     store.put(key, source.getvalue(), "image/png")
     with pytest.raises(ApplicationError):
-        await deliver_studio_pack(value(), [key], QAReview("reject", "reviewer", "wrong label"))
+        await deliver_studio_pack(value(), [key], QAReview("reject", "reviewer", "wrong label", "0" * 64))
     with pytest.raises(ApplicationError):
-        await deliver_studio_pack(value(), ["tenant-2/packs/pack-1/qa/asset.png"], QAReview("approve", "reviewer", ""))
+        await deliver_studio_pack(value(), ["tenant-2/packs/pack-1/qa/asset.png"], QAReview("approve", "reviewer", "", "0" * 64))
     assert store.objects.keys() == {key}
 
 
@@ -105,7 +106,11 @@ async def test_approved_delivery_has_only_tenant_scoped_formats(monkeypatch):
     source = io.BytesIO()
     Image.new("RGB", (100, 100), "blue").save(source, format="PNG")
     store.put(key, source.getvalue(), "image/png")
-    delivered = await deliver_studio_pack(value(), [key], QAReview("approve", "qa-1", ""))
+    manifest = json.dumps({"tenant_id": "tenant-1", "pack_id": "pack-1",
+                           "workflow_version": studio.WORKFLOW_VERSION, "assets": [key], "qa_status": "pending"}, indent=2).encode()
+    store.put(f"{qa_prefix(value())}/manifest.json", manifest, "application/json")
+    manifest_sha256 = hashlib.sha256(manifest).hexdigest()
+    delivered = await deliver_studio_pack(value(), [key], QAReview("approve", "qa-1", "", manifest_sha256))
     assert len(delivered) == 2
     assert all(key.startswith(delivered_prefix(value()) + "/") for key in delivered)
     manifest = json.loads(store.get(f"{delivered_prefix(value())}/manifest.json"))
@@ -116,12 +121,12 @@ async def test_approved_delivery_has_only_tenant_scoped_formats(monkeypatch):
 async def test_rejection_records_reason_without_delivery(monkeypatch):
     store = MemoryStore()
     monkeypatch.setattr("studio_main.asset_store", lambda: store)
-    await record_studio_rejection(value(), QAReview("reject", "qa-1", "product label changed"))
+    await record_studio_rejection(value(), QAReview("reject", "qa-1", "product label changed", "0" * 64))
     rejection = json.loads(store.get("tenant-1/packs/pack-1/rejection.json"))
     assert rejection["reason"] == "product label changed"
     assert not any("/delivered/" in key for key in store.objects)
     with pytest.raises(ApplicationError):
-        await record_studio_rejection(value(), QAReview("reject", "qa-1", ""))
+        await record_studio_rejection(value(), QAReview("reject", "qa-1", "", "0" * 64))
 
 
 async def test_output_count_must_match_purchased_pack():
@@ -175,3 +180,41 @@ async def test_failure_metric_error_does_not_mask_business_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="business failure"):
         await instance.run(value())
+
+
+async def test_delivery_fails_closed_when_reviewed_manifest_changes(monkeypatch):
+    store = MemoryStore()
+    monkeypatch.setattr("studio_main.asset_store", lambda: store)
+    key = f"{qa_prefix(value())}/asset-01.png"
+    source = io.BytesIO()
+    Image.new("RGB", (100, 100), "blue").save(source, format="PNG")
+    store.put(key, source.getvalue(), "image/png")
+    manifest = json.dumps({"tenant_id": "tenant-1", "pack_id": "pack-1",
+                           "workflow_version": studio.WORKFLOW_VERSION, "assets": [key], "qa_status": "pending"}, indent=2).encode()
+    reviewed_sha256 = hashlib.sha256(manifest).hexdigest()
+    store.put(f"{qa_prefix(value())}/manifest.json", manifest + b"\n", "application/json")
+
+    with pytest.raises(ApplicationError, match="manifest changed"):
+        await deliver_studio_pack(value(), [key], QAReview("approve", "qa-1", "", reviewed_sha256))
+    assert not any("/delivered/" in key for key in store.objects)
+
+
+def test_studio_query_and_review_are_bound_to_current_qa_manifest(monkeypatch):
+    monkeypatch.setattr(studio.workflow, "now", lambda: datetime.now(timezone.utc))
+    instance = StudioWorkflow()
+    instance._value = value()
+    instance._status = "awaiting_qa"
+    instance._asset_count = 7
+    instance._manifest_sha256 = "a" * 64
+
+    instance.review(QAReview("approve", "qa-1", "", "b" * 64))
+    assert instance._review is None
+
+    instance.review(QAReview("approve", "qa-1", "", "a" * 64))
+    instance.review(QAReview("reject", "qa-2", "changed decision", "a" * 64))
+    snapshot = instance.status()
+
+    assert instance._review == QAReview("approve", "qa-1", "", "a" * 64)
+    assert snapshot.status == "approved"
+    assert snapshot.assets == 7
+    assert snapshot.manifest_sha256 == "a" * 64

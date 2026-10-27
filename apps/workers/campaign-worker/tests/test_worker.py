@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from temporalio.exceptions import ApplicationError
 
@@ -53,6 +55,7 @@ async def test_metric_failures_do_not_void_a_dispatched_campaign(monkeypatch):
         raise AssertionError(f"unexpected activity: {activity}")
 
     monkeypatch.setattr(campaign.workflow, "logger", Logger())
+    monkeypatch.setattr(campaign.workflow, "now", lambda: datetime.now(timezone.utc))
     monkeypatch.setattr(campaign.workflow, "wait_condition", wait_condition)
     monkeypatch.setattr(campaign.workflow, "execute_activity", execute_activity)
     instance = campaign.CampaignWorkflow()
@@ -60,3 +63,34 @@ async def test_metric_failures_do_not_void_a_dispatched_campaign(monkeypatch):
 
     assert await instance.run(value) == "dispatched:dispatch-1"
     assert settlements == ["post"]
+
+
+def test_campaign_query_exposes_workflow_state_without_brief():
+    instance = campaign.CampaignWorkflow()
+    instance._value = CampaignInput("tenant-a", "campaign-a", "sensitive brief", 12500, cycle_id="cycle-1")
+    instance._started_at = "2026-10-28T00:00:00+00:00"
+    instance._updated_at = instance._started_at
+    instance._status = "awaiting_approval"
+
+    snapshot = instance.status()
+
+    assert snapshot.tenant_id == "tenant-a"
+    assert snapshot.campaign_id == "campaign-a"
+    assert snapshot.status == "awaiting_approval"
+    assert snapshot.amount_minor == 12500
+    assert "sensitive brief" not in repr(snapshot)
+
+
+def test_campaign_signal_accepts_only_current_awaiting_approval_state(monkeypatch):
+    monkeypatch.setattr(campaign.workflow, "now", lambda: datetime.now(timezone.utc))
+    instance = campaign.CampaignWorkflow()
+    instance._status = "drafting"
+    instance.approve(campaign.Approval("early", "reviewer-1"))
+    assert instance._approval is None
+
+    instance._status = "awaiting_approval"
+    instance.approve(campaign.Approval("approval-1", "reviewer-1"))
+    instance.approve(campaign.Approval("approval-2", "reviewer-2"))
+
+    assert instance._approval == campaign.Approval("approval-1", "reviewer-1")
+    assert instance._status == "approved"

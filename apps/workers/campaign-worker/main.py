@@ -71,6 +71,19 @@ class Approval:
     approver: str
 
 
+@dataclass(frozen=True)
+class CampaignStatus:
+    tenant_id: str
+    campaign_id: str
+    cycle_id: str
+    status: str
+    amount_minor: int
+    currency: str
+    channels: list[str]
+    started_at: str
+    updated_at: str
+
+
 def validate_campaign(value: CampaignInput) -> None:
     if any(not ID_RE.fullmatch(identifier) for identifier in (value.tenant_id, value.campaign_id, value.cycle_id)):
         raise ApplicationError("valid tenant_id, campaign_id, and cycle_id are required", non_retryable=True)
@@ -190,57 +203,103 @@ async def settle_budget(value: CampaignInput, reservation_id: str, outcome: str)
 class CampaignWorkflow:
     def __init__(self) -> None:
         self._approval: Approval | None = None
+        self._value: CampaignInput | None = None
+        self._status = "drafting"
+        self._channels: list[str] = []
+        self._started_at = ""
+        self._updated_at = ""
+
+    def _transition(self, status: str) -> None:
+        self._status = status
+        self._updated_at = workflow.now().isoformat()
+
+    @workflow.query
+    def status(self) -> CampaignStatus:
+        value = self._value
+        return CampaignStatus(
+            tenant_id=value.tenant_id if value else "",
+            campaign_id=value.campaign_id if value else "",
+            cycle_id=value.cycle_id if value else "",
+            status=self._status,
+            amount_minor=value.amount_minor if value else 0,
+            currency=value.currency if value else "NGN",
+            channels=list(self._channels),
+            started_at=self._started_at,
+            updated_at=self._updated_at,
+        )
 
     @workflow.signal
     def approve(self, approval: Approval) -> None:
         if not approval.approval_id.strip() or not approval.approver.strip():
             raise ApplicationError("approval_id and approver are required")
+        # Duplicate or out-of-state signals cannot replace the original human
+        # decision or move a completed/timed-out workflow backwards.
+        if self._status != "awaiting_approval" or self._approval is not None:
+            return
         self._approval = approval
+        self._transition("approved")
 
     @workflow.run
     async def run(self, value: CampaignInput) -> str:
         validate_campaign(value)
+        self._value = value
+        self._started_at = workflow.now().isoformat()
+        self._updated_at = self._started_at
         activity_options = {
             "start_to_close_timeout": timedelta(minutes=2),
             "retry_policy": RetryPolicy(maximum_attempts=3),
         }
-        draft_id = await workflow.execute_activity(draft_campaign, value, **activity_options)
         try:
-            await workflow.wait_condition(lambda: self._approval is not None, timeout=timedelta(hours=24))
-        except asyncio.TimeoutError:
+            draft_id = await workflow.execute_activity(draft_campaign, value, **activity_options)
+            self._transition("awaiting_approval")
             try:
-                await workflow.execute_activity(record_campaign_approval, "timeout", **activity_options)
+                await workflow.wait_condition(lambda: self._approval is not None, timeout=timedelta(hours=24))
+            except asyncio.TimeoutError:
+                self._transition("approval_timed_out")
+                try:
+                    await workflow.execute_activity(record_campaign_approval, "timeout", **activity_options)
+                except Exception as exc:
+                    workflow.logger.warning("approval metric recording failed: %s", exc)
+                return "approval_timed_out"
+            approval = self._approval
+            assert approval is not None
+            try:
+                await workflow.execute_activity(record_campaign_approval, "approved", **activity_options)
             except Exception as exc:
                 workflow.logger.warning("approval metric recording failed: %s", exc)
-            return "approval_timed_out"
-        approval = self._approval
-        assert approval is not None
-        try:
-            await workflow.execute_activity(record_campaign_approval, "approved", **activity_options)
-        except Exception as exc:
-            workflow.logger.warning("approval metric recording failed: %s", exc)
-        reservation_id = await workflow.execute_activity(reserve_budget, value, **activity_options)
-        try:
-            outcome = await workflow.execute_activity(
-                dispatch_campaign, args=[value, draft_id, approval.approval_id], **activity_options
-            )
+            self._transition("reserving")
+            reservation_id = await workflow.execute_activity(reserve_budget, value, **activity_options)
             try:
-                await workflow.execute_activity(record_campaign_cycle, args=[value, outcome], **activity_options)
-            except Exception as exc:
-                # Metrics are operational side effects and must not void an
-                # already-dispatched campaign or change its financial outcome.
-                workflow.logger.warning("campaign cycle metric recording failed: %s", exc)
-            await workflow.execute_activity(
-                settle_budget, args=[value, reservation_id, "post"], **activity_options
-            )
-        except BaseException:
-            await workflow.execute_activity(
-                settle_budget, args=[value, reservation_id, "void"],
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=RetryPolicy(maximum_attempts=10),
-            )
+                self._transition("dispatching")
+                outcome = await workflow.execute_activity(
+                    dispatch_campaign, args=[value, draft_id, approval.approval_id], **activity_options
+                )
+                self._channels = [channel.channel for channel in outcome.channels]
+                try:
+                    await workflow.execute_activity(record_campaign_cycle, args=[value, outcome], **activity_options)
+                except Exception as exc:
+                    # Metrics are operational side effects and must not void an
+                    # already-dispatched campaign or change its financial outcome.
+                    workflow.logger.warning("campaign cycle metric recording failed: %s", exc)
+                self._transition("settling")
+                await workflow.execute_activity(
+                    settle_budget, args=[value, reservation_id, "post"], **activity_options
+                )
+            except BaseException:
+                await workflow.execute_activity(
+                    settle_budget, args=[value, reservation_id, "void"],
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=10),
+                )
+                raise
+            self._transition("completed")
+            return f"dispatched:{outcome.dispatch_id}"
+        except asyncio.CancelledError:
+            self._transition("cancelled")
             raise
-        return f"dispatched:{outcome.dispatch_id}"
+        except BaseException:
+            self._transition("failed")
+            raise
 
 
 async def main() -> None:

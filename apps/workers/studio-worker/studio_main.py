@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -45,6 +47,13 @@ class QAReview:
     decision: str
     reviewer: str
     reason: str
+    manifest_sha256: str
+
+
+@dataclass(frozen=True)
+class QAManifest:
+    assets: list[str]
+    manifest_sha256: str
 
 
 @dataclass
@@ -52,6 +61,19 @@ class StudioResult:
     pack_id: str
     status: str
     assets: list[str]
+
+
+@dataclass(frozen=True)
+class StudioStatus:
+    tenant_id: str
+    pack_id: str
+    product_id: str
+    tier: str
+    status: str
+    assets: int
+    manifest_sha256: str
+    started_at: str
+    updated_at: str
 
 
 def validate_studio(value: StudioInput) -> None:
@@ -186,7 +208,7 @@ async def wait_studio_pack(value: StudioInput, prompt_id: str) -> list[dict[str,
 
 
 @activity.defn
-async def store_qa_assets(value: StudioInput, images: list[dict[str, str]]) -> list[str]:
+async def store_qa_assets(value: StudioInput, images: list[dict[str, str]]) -> QAManifest:
     if len(images) != PACK_IMAGES[value.tier]:
         raise ApplicationError("ComfyUI output count does not match the purchased pack", non_retryable=True)
     store = asset_store()
@@ -201,8 +223,9 @@ async def store_qa_assets(value: StudioInput, images: list[dict[str, str]]) -> l
         keys.append(key)
     manifest = json.dumps({"tenant_id": value.tenant_id, "pack_id": value.pack_id,
                            "workflow_version": WORKFLOW_VERSION, "assets": keys, "qa_status": "pending"}, indent=2).encode()
+    manifest_sha256 = hashlib.sha256(manifest).hexdigest()
     await asyncio.to_thread(store.put, f"{qa_prefix(value)}/manifest.json", manifest, "application/json")
-    return keys
+    return QAManifest(keys, manifest_sha256)
 
 
 @activity.defn
@@ -210,7 +233,8 @@ async def record_studio_rejection(value: StudioInput, review: QAReview) -> None:
     if review.decision != "reject" or not review.reason.strip() or not review.reviewer.strip():
         raise ApplicationError("a rejection reason and reviewer are required", non_retryable=True)
     payload = json.dumps({"pack_id": value.pack_id, "reviewer": review.reviewer,
-                          "reason": review.reason, "workflow_version": WORKFLOW_VERSION}, indent=2).encode()
+                          "reason": review.reason, "manifest_sha256": review.manifest_sha256,
+                          "workflow_version": WORKFLOW_VERSION}, indent=2).encode()
     await asyncio.to_thread(asset_store().put, f"{value.tenant_id}/packs/{value.pack_id}/rejection.json",
                             payload, "application/json")
 
@@ -223,6 +247,20 @@ async def deliver_studio_pack(value: StudioInput, qa_keys: list[str], review: QA
     if not qa_keys or any(not key.startswith(expected_root) for key in qa_keys):
         raise ApplicationError("QA assets are outside this tenant pack", non_retryable=True)
     store = asset_store()
+    # Bind delivery to the exact manifest reviewed by the human. A replaced or
+    # partially rewritten QA manifest must fail closed instead of being delivered.
+    manifest_bytes = await asyncio.to_thread(store.get, f"{expected_root}manifest.json")
+    actual_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if not hmac.compare_digest(actual_sha256, review.manifest_sha256):
+        raise ApplicationError("QA manifest changed after human review", non_retryable=True)
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ApplicationError("QA manifest is invalid", non_retryable=True) from exc
+    if (manifest.get("tenant_id") != value.tenant_id or manifest.get("pack_id") != value.pack_id
+            or manifest.get("workflow_version") != WORKFLOW_VERSION or manifest.get("qa_status") != "pending"
+            or manifest.get("assets") != qa_keys):
+        raise ApplicationError("QA manifest does not match the approved pack", non_retryable=True)
     delivered = []
     for index, key in enumerate(qa_keys, start=1):
         activity.heartbeat()
@@ -252,6 +290,31 @@ def record_studio_outcome(result: StudioResult, started_at: datetime) -> None:
 class StudioWorkflow:
     def __init__(self) -> None:
         self._review: QAReview | None = None
+        self._value: StudioInput | None = None
+        self._status = "generating"
+        self._asset_count = 0
+        self._manifest_sha256 = ""
+        self._started_at = ""
+        self._updated_at = ""
+
+    def _transition(self, status: str) -> None:
+        self._status = status
+        self._updated_at = workflow.now().isoformat()
+
+    @workflow.query
+    def status(self) -> StudioStatus:
+        value = self._value
+        return StudioStatus(
+            tenant_id=value.tenant_id if value else "",
+            pack_id=value.pack_id if value else "",
+            product_id=value.product_id if value else "",
+            tier=value.tier if value else "starter",
+            status=self._status,
+            assets=self._asset_count,
+            manifest_sha256=self._manifest_sha256,
+            started_at=self._started_at,
+            updated_at=self._updated_at,
+        )
 
     @workflow.signal
     def review(self, review: QAReview) -> None:
@@ -259,18 +322,34 @@ class StudioWorkflow:
             raise ApplicationError("decision and reviewer are required")
         if review.decision == "reject" and not review.reason.strip():
             raise ApplicationError("rejection reason is required")
+        if not re.fullmatch(r"[0-9a-f]{64}", review.manifest_sha256):
+            raise ApplicationError("a valid QA manifest SHA-256 is required")
+        # Out-of-state, duplicate, and stale-manifest reviews are ignored. The
+        # HTTP boundary returns a conflict after its preflight query; a racing
+        # signal must never overwrite the original decision or fail the workflow.
+        if (self._status != "awaiting_qa" or self._review is not None
+                or not hmac.compare_digest(review.manifest_sha256, self._manifest_sha256)):
+            return
         self._review = review
+        self._transition("approved" if review.decision == "approve" else "rejecting")
 
     @workflow.run
     async def run(self, value: StudioInput) -> StudioResult:
         started_at = workflow.now()
+        self._value = value
+        self._started_at = started_at.isoformat()
+        self._updated_at = self._started_at
         options = {
             "start_to_close_timeout": timedelta(minutes=2),
             "retry_policy": RetryPolicy(maximum_attempts=3),
         }
         try:
             result = await self._execute(value)
+        except asyncio.CancelledError:
+            self._transition("cancelled")
+            raise
         except BaseException:
+            self._transition("failed")
             try:
                 await workflow.execute_activity(
                     record_studio_outcome, args=[StudioResult(value.pack_id, "failed", []), started_at], **options
@@ -295,17 +374,24 @@ class StudioWorkflow:
         }
         prompt_id = await workflow.execute_activity(submit_studio_pack, value, **options)
         images = await workflow.execute_activity(wait_studio_pack, args=[value, prompt_id], **options)
-        qa_keys = await workflow.execute_activity(store_qa_assets, args=[value, images], **options)
+        qa_manifest = await workflow.execute_activity(store_qa_assets, args=[value, images], **options)
+        self._asset_count = len(qa_manifest.assets)
+        self._manifest_sha256 = qa_manifest.manifest_sha256
+        self._transition("awaiting_qa")
         try:
             await workflow.wait_condition(lambda: self._review is not None, timeout=timedelta(hours=24))
         except asyncio.TimeoutError:
+            self._transition("qa_timed_out")
             return StudioResult(value.pack_id, "qa_timed_out", [])
         review = self._review
         assert review is not None
         if review.decision == "reject":
             await workflow.execute_activity(record_studio_rejection, args=[value, review], **options)
+            self._transition("rejected")
             return StudioResult(value.pack_id, "rejected", [])
-        assets = await workflow.execute_activity(deliver_studio_pack, args=[value, qa_keys, review], **options)
+        self._transition("delivering")
+        assets = await workflow.execute_activity(deliver_studio_pack, args=[value, qa_manifest.assets, review], **options)
+        self._transition("delivered")
         return StudioResult(value.pack_id, "delivered", assets)
 
 
