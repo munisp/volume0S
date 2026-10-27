@@ -183,7 +183,7 @@ def preflight(args: argparse.Namespace) -> int:
         results.append(result("PF-CONTEXT", "passed" if code == 0 else "blocked",
                               "Expected context reached the core namespace" if code == 0 else f"Cluster access failed: {payload}"))
         expected = {
-            "core": {"svc-tenancy", "svc-provisioning", "listmonk", "postiz"},
+            "core": {"svc-tenancy", "svc-provisioning", "svc-orchestrator", "listmonk", "postiz"},
             "workers": {"campaign-worker", "studio-worker", "synthetic-probe"},
             "ai": {str((config or {}).get("comfyui", {}).get("deployment", "comfyui"))},
         }
@@ -217,8 +217,10 @@ def preflight(args: argparse.Namespace) -> int:
         required_secrets = {
             ("core", "svc-tenancy"): {"database-url", "service-token", "suppression-hmac-secret"},
             ("core", "svc-provisioning"): {"service-token", "keycloak-admin-client-id", "keycloak-admin-client-secret"},
+            ("core", "svc-orchestrator"): {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"},
             ("core", "listmonk-admin"): {"admin-password"},
             ("core", "postiz"): {"DATABASE_URL", "REDIS_URL", "JWT_SECRET"},
+            ("workers", "studio-worker"): {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"},
             ("workers", "synthetic-probe"): {"client-id", "client-secret", "service-token"},
         }
         secret_errors: list[str] = []

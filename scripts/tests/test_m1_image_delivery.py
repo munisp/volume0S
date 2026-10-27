@@ -14,7 +14,7 @@ assert SPEC.loader
 SPEC.loader.exec_module(delivery)
 
 REVISION = "a" * 40
-DIGESTS = {image["name"]: f"sha256:{chr(98 + index) * 64}" for index, image in enumerate(delivery.IMAGES)}
+DIGESTS = {image["name"]: f"sha256:{'abcdef'[index] * 64}" for index, image in enumerate(delivery.IMAGES)}
 
 
 def arguments(output: Path) -> argparse.Namespace:
@@ -70,16 +70,20 @@ class FakeTools:
 
 class ImageDeliveryTests(unittest.TestCase):
     def test_catalog_is_complete_pinned_and_nonroot(self):
-        self.assertEqual(5, len(delivery.IMAGES))
-        self.assertEqual(5, len({image["name"] for image in delivery.IMAGES}))
+        self.assertEqual(6, len(delivery.IMAGES))
+        self.assertEqual(6, len({image["name"] for image in delivery.IMAGES}))
+        self.assertIn("svc-orchestrator", {image["name"] for image in delivery.IMAGES})
         for image in delivery.IMAGES:
             self.assertNotEqual("latest", image["tag"])
             self.assertNotIn(image["user"], {"", "0", "0:0", "root"})
             self.assertTrue((delivery.ROOT / image["context"] / "Dockerfile").is_file())
 
     def test_python_runtime_images_require_test_stage_completion(self):
-        for name in ("campaign-worker", "studio-worker", "synthetic-probe"):
-            text = (delivery.ROOT / f"apps/workers/{name}/Dockerfile").read_text()
+        dockerfiles = [delivery.ROOT / f"apps/workers/{name}/Dockerfile" for name in
+                       ("campaign-worker", "studio-worker", "synthetic-probe")]
+        dockerfiles.append(delivery.ROOT / "apps/core/svc-orchestrator/Dockerfile")
+        for dockerfile in dockerfiles:
+            text = dockerfile.read_text()
             self.assertIn("python -m pytest && touch /tests-passed", text)
             self.assertIn("COPY --from=test /tests-passed /app/.tests-passed", text)
             runtime = text.split("AS runtime", 1)[1]
@@ -124,7 +128,7 @@ class ImageDeliveryTests(unittest.TestCase):
                 published = delivery.load_json(output / "images.json")
                 self.assertEqual("published", published["status"])
                 self.assertEqual(DIGESTS, {name: value["digest"] for name, value in published["images"].items()})
-                self.assertEqual(5, len(fake.pushed))
+                self.assertEqual(6, len(fake.pushed))
                 self.assertEqual(0, delivery.verify(arguments(output)))
                 fake.digests["svc-tenancy"] = "sha256:" + "f" * 64
                 with self.assertRaisesRegex(RuntimeError, "registry digest changed"):
