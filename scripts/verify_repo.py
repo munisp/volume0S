@@ -109,7 +109,14 @@ monitoring_dir = ROOT / "monitoring/m1"
 rule_path = monitoring_dir / "prometheusrule.yaml"
 rule = yaml.safe_load(rule_path.read_text())
 rule_text = rule_path.read_text()
-for required in ("0.072", "0.03", "volumeos:campaign_dispatch_success_ratio:cycle < 0.99", 'absent(volumeos_http_requests_total{service="svc-tenancy"})', 'absent(probe_success{journey="login"}) or absent(probe_success{journey="send"})'):
+for required in (
+    "0.072", "0.03", "volumeos:campaign_dispatch_success_ratio:cycle < 0.99",
+    'absent(volumeos_http_requests_total{service="svc-tenancy"})',
+    'absent(probe_success{journey="login"}) or absent(probe_success{journey="send"})',
+    "volumeos_campaign_cycle_completed_timestamp_seconds", "> time() - 3600",
+    "max by (tenant_id, campaign_id, cycle_id, channel, result)",
+    "sum by (tenant_id, campaign_id, cycle_id)",
+):
     if required not in rule_text:
         errors.append(f"M1 SLO rule is missing {required}")
 if rule["metadata"]["name"] != "volumeos-m1-slo":
@@ -118,7 +125,11 @@ dashboard = json.loads((monitoring_dir / "grafana-dashboard.json").read_text())
 if dashboard.get("uid") != "volumeos-m1-slo":
     errors.append("M1 Grafana dashboard UID is missing or incorrect")
 dashboard_text = json.dumps(dashboard)
-for required in ("0.995", "volumeos:campaign_dispatch_success_ratio:cycle", "probe_success", "volumeos_studio_packs_total"):
+for required in (
+    "0.995", "volumeos:campaign_dispatch_success_ratio:cycle", "probe_success",
+    "volumeos_studio_packs_total", "max by (tenant_id, campaign_id, cycle_id, channel, result)",
+    "sum by (channel, result)",
+):
     if required not in dashboard_text:
         errors.append(f"M1 dashboard is missing {required}")
 monitoring_kustomization_path = monitoring_dir / "kustomization.yaml"
@@ -131,6 +142,71 @@ for generator in monitoring_kustomization.get("configMapGenerator", []):
         source = entry.split("=", 1)[-1]
         if not (monitoring_dir / source).is_file():
             errors.append(f"monitoring/m1: missing dashboard source {source}")
+
+# M1 emission contracts must stay aligned with the dashboard and alert queries.
+instrumentation_contracts = {
+    "apps/core/svc-tenancy/metrics.go": ("volumeos_http_requests_total", 'service=\\"svc-tenancy\\"'),
+    "apps/workers/campaign-worker/metrics.py": (
+        "volumeos_campaign_approvals_total", "volumeos_campaign_cycle_dispatches",
+        "volumeos_campaign_dispatch_duration_seconds",
+        "volumeos_campaign_cycle_completed_timestamp_seconds", "CYCLE_COMPLETED",
+    ),
+    "apps/workers/studio-worker/metrics.py": (
+        "volumeos_studio_packs_total", "volumeos_studio_pack_duration_seconds",
+    ),
+    "apps/workers/synthetic-probe/main.py": (
+        "probe_success", "probe_duration_seconds", "INTERVAL_SECONDS = 300.0",
+        'body.get("status") != "completed"', 'body.get("synthetic") is not True',
+    ),
+}
+for relative, required_values in instrumentation_contracts.items():
+    path = ROOT / relative
+    if not path.is_file():
+        errors.append(f"missing M1 instrumentation: {relative}")
+        continue
+    text = path.read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"{relative}: missing metric/probe contract {required}")
+
+workflow_isolation_contracts = {
+    "apps/workers/campaign-worker/main.py": (
+        'workflow.logger.warning("approval metric recording failed: %s", exc)',
+        'workflow.logger.warning("campaign cycle metric recording failed: %s", exc)',
+    ),
+    "apps/workers/studio-worker/studio_main.py": (
+        'workflow.logger.warning("Studio failure metric recording failed: %s", metric_error)',
+        'workflow.logger.warning("Studio outcome metric recording failed: %s", metric_error)',
+    ),
+}
+for relative, required_values in workflow_isolation_contracts.items():
+    text = (ROOT / relative).read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"{relative}: metric failure can affect a business outcome; missing {required}")
+
+for relative, image in (
+    ("apps/core/svc-tenancy/k8s/deployment.yaml", "ghcr.io/munisp/svc-tenancy:0.2.0"),
+    ("apps/workers/campaign-worker/k8s/deployment.yaml", "ghcr.io/munisp/campaign-worker:0.2.0"),
+    ("apps/workers/studio-worker/k8s/deployment.yaml", "ghcr.io/munisp/studio-worker:0.2.0"),
+    ("apps/workers/synthetic-probe/k8s/deployment.yaml", "ghcr.io/munisp/synthetic-probe:0.1.0"),
+):
+    if image not in (ROOT / relative).read_text():
+        errors.append(f"{relative}: expected instrumented image {image}")
+for env in ("dev", "stage"):
+    overlay_text = (ROOT / f"deploy/overlays/{env}/kustomization.yaml").read_text()
+    if "../../../apps/workers/synthetic-probe/k8s" not in overlay_text:
+        errors.append(f"{env} overlay is missing the M1 synthetic probe")
+if "synthetic-probe" in (ROOT / "deploy/overlays/prod/kustomization.yaml").read_text():
+    errors.append("synthetic send probe must not be included in production")
+worker_monitors = (monitoring_dir / "worker-servicemonitors.yaml").read_text()
+for name in ("campaign-worker", "studio-worker", "synthetic-probe"):
+    if f"name: {name}" not in worker_monitors:
+        errors.append(f"worker ServiceMonitors are missing {name}")
+acceptance_preflight = (ROOT / "scripts/staging_acceptance.py").read_text()
+for required in ('("workers", "synthetic-probe")', '("servicemonitor", "synthetic-probe")'):
+    if required not in acceptance_preflight:
+        errors.append(f"staging preflight is missing {required}")
 
 required_topics = {"usage.events", "message.status", "census.pings", "lead.events", "money.events", "ai.jobs", "audit.publish"}
 text = (ROOT / "bootstrap/platform/kafka-topics.yaml").read_text()
