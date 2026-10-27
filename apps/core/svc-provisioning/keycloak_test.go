@@ -56,12 +56,16 @@ func TestKeycloakTenantLifecycleIsIdempotent(t *testing.T) {
 		adminURL: server.URL + "/admin", tokenURL: server.URL + "/token",
 		clientID: "provisioner", clientSecret: "admin-secret", httpClient: &http.Client{Timeout: time.Second},
 	}
-	clientID, err := client.EnsureTenant(context.Background(), "tenant-a", "Demo Gym", "lagos-yaba")
-	if err != nil || clientID != "volumeos-tenant-a" {
-		t.Fatalf("ensure: %s %v", clientID, err)
+	clientID, owned, err := client.EnsureTenant(context.Background(), "tenant-a", "Demo Gym", "lagos-yaba")
+	if err != nil || clientID != "volumeos-tenant-a" || !owned {
+		t.Fatalf("ensure: %s owned=%t %v", clientID, owned, err)
 	}
-	if _, err := client.EnsureTenant(context.Background(), "tenant-a", "Demo Gym", "lagos-yaba"); err != nil {
+	_, owned, err = client.EnsureTenant(context.Background(), "tenant-a", "Demo Gym", "lagos-yaba")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if owned {
+		t.Fatal("reused Keycloak client was incorrectly marked as onboarding-owned")
 	}
 	if created != 1 {
 		t.Fatalf("duplicate clients created: %d", created)
