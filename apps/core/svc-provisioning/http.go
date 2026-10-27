@@ -79,12 +79,12 @@ func (a *API) createIdentity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "valid matching tenant, name, and corridor are required")
 		return
 	}
-	clientID, err := a.keycloak.EnsureTenant(r.Context(), input.TenantID, strings.TrimSpace(input.Name), input.Corridor)
+	clientID, created, err := a.keycloak.EnsureTenant(r.Context(), input.TenantID, strings.TrimSpace(input.Name), input.Corridor)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "identity_provisioning_failed", "Keycloak could not provision the tenant")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"client_id": clientID})
+	writeJSON(w, http.StatusOK, map[string]any{"client_id": clientID, "created": created})
 }
 
 func (a *API) deleteIdentity(w http.ResponseWriter, r *http.Request) {
