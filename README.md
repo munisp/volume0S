@@ -19,7 +19,7 @@ This repository currently implements the **M0 foundation plus an M1 offer, messa
 - **Event contracts:** Protobuf envelopes and usage, money, lead, message-status, and audit-publish records; `money.events` is explicitly a mirror, not a ledger.
 - **GitOps:** pinned Argo CD applications, Dapr mTLS, APISIX + open-appsec, Strimzi Kafka and seven topics, PostgreSQL, Redis, MinIO buckets, Keycloak, OpenSearch, Temporal, observability, Kubecost, and OpenCTI. M1 adds reviewed ListMonk and Postiz packaging; Wazuh is pinned but deliberately not auto-synced before its private secret overlay.
 - **Verification:** Go, Python, and Rust tests; static manifest/source checks; CI for tests, lint, and Kustomize rendering.
-- **M1 acceptance tooling:** fail-closed, read-only staging preflight; requirement-mapped evidence capture with SHA-256 artifact verification; reviewed SLO dashboard/alert definitions and an operational drill runbook. These tools do not assert that staging has passed, and the monitoring resources remain unapplied until the required service/probe instrumentation exists.
+- **M1 observability and acceptance tooling:** Core request, campaign cycle/provider, Studio outcome, and five-minute login/send synthetic instrumentation; internal ServiceMonitors; fail-closed, read-only staging preflight; requirement-mapped evidence capture with SHA-256 artifact verification; and reviewed SLO dashboard/alert definitions. These tools do not assert that staging has passed. The dedicated provider-sandbox send endpoint, private probe configuration, published images, and live evidence remain required.
 
 ## Intentionally not represented as complete
 
@@ -32,6 +32,7 @@ apps/core/svc-tenancy/          Go API, OIDC, PostgreSQL, messaging policy, test
 apps/core/svc-provisioning/     Keycloak and Postiz onboarding boundary, tests
 apps/workers/campaign-worker/   Campaign/onboarding workflows, messaging adapters, tests
 apps/workers/studio-worker/     ComfyUI workflow, QA gate, asset delivery, tests
+apps/workers/synthetic-probe/   Five-minute login/send journeys and probe tests
 bootstrap/m1/postiz/           Reviewed upstream-image packaging with existing secrets
 libs-rust/tb-adapter/           Two-phase reservation contract and tests
 proto/volumeos/v1/              Backbone event contracts
@@ -65,6 +66,10 @@ python3 -m pip install -e '.[test]'
 PYTHONPATH=. python3 -m pytest
 
 cd ../studio-worker
+python3 -m pip install -e '.[test]'
+PYTHONPATH=. python3 -m pytest
+
+cd ../synthetic-probe
 python3 -m pip install -e '.[test]'
 PYTHONPATH=. python3 -m pytest
 
@@ -125,10 +130,10 @@ Sync waves order resources during an Argo sync operation; they are **not** a sub
 - Accept the real Keycloak and Postiz provisioner against staging providers; no fake success responses are included.
 - Verify per-tenant ListMonk lists and Dapr Postiz credentials, customer OAuth integration validation, double opt-in and persistent suppression, provider webhooks, and zero sends while suspended.
 - Run the onboarding failure-injection drill and confirm every compensating action and optimistic tenancy transition.
-- Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48-hour turnaround.
+- Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48h turnaround.
 - Replace Wazuh bootstrap credentials/certificates before activation, then run the purple-team detection drill.
-- Reconcile provider cost with `usage.events` and publish M1 SLO dashboards.
+- Build and publish the changed service/worker/probe images, configure the dedicated synthetic sandbox send endpoint and credentials, verify five-minute login/send evidence and alert delivery, reconcile provider cost with `usage.events`, and publish M1 SLO dashboards.
 
-Use [`docs/m1/STAGING_ACCEPTANCE.md`](docs/m1/STAGING_ACCEPTANCE.md) to run the preflight and capture real evidence. The current repository supplies the acceptance process and monitoring definitions; it does not contain a passing staging evidence bundle. See [`docs/m1/OBSERVABILITY.md`](docs/m1/OBSERVABILITY.md) before applying `monitoring/m1/`.
+Use [`docs/m1/STAGING_ACCEPTANCE.md`](docs/m1/STAGING_ACCEPTANCE.md) to run the preflight and capture real evidence. The current repository supplies instrumentation, the acceptance process, and monitoring definitions; it does not contain a passing staging evidence bundle. See [`docs/m1/OBSERVABILITY.md`](docs/m1/OBSERVABILITY.md) before applying `monitoring/m1/`.
 
 See [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) and [`docs/m1/REQUIREMENTS.md`](docs/m1/REQUIREMENTS.md) for requirement-level status.
