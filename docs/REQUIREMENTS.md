@@ -18,7 +18,8 @@ Status terms: **tested** = automated local verification; **configured** = manife
 | BIL-1/2 | u128 minor-unit reservation contract; live TigerBeetle and all balance reads reserved for M2 | tested / later |
 | STR-1/2 | Protobuf contracts; Kafka topics, partitions, RF, and retention | configured |
 | STR-3/4 | Fluvio pinned from source; connectors, SmartModules, Debezium and replay drills remain | configured / later |
-| OBS-1/2/5 | Prometheus/Grafana/OpenSearch/Kubecost applications and service scrape annotations | configured |
+| OBS-1/2/5 | Prometheus/Grafana/OpenSearch/Kubecost applications and service scrape annotations; M1 SLO dashboard/alert sources and metric contract added, but instrumentation and live SLO evidence remain open | configured / acceptance required |
+| OBS-6, NFR-2/3/4 | Requirement-mapped M1 staging preflight, evidence verifier, and operational runbook; real probes, alerts, SLO reports, and restore drills require staging | tested tooling / acceptance required |
 | NFR-7 | TLS/mTLS components and non-root containers; secret and certificate drills remain | configured |
 | NFR-12 | CI tests/lint plus money-state tests; connector and chaos gates expand by milestone | tested / configured |
 
