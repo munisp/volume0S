@@ -130,7 +130,7 @@ Sync waves order resources during an Argo sync operation; they are **not** a sub
 - Accept the real Keycloak and Postiz provisioner against staging providers; no fake success responses are included.
 - Verify per-tenant ListMonk lists and Dapr Postiz credentials, customer OAuth integration validation, double opt-in and persistent suppression, provider webhooks, and zero sends while suspended.
 - Run the onboarding failure-injection drill and confirm every compensating action and optimistic tenancy transition.
-- Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48h turnaround.
+- Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48-hour turnaround.
 - Replace Wazuh bootstrap credentials/certificates before activation, then run the purple-team detection drill.
 - Build and publish the changed service/worker/probe images, configure the dedicated synthetic sandbox send endpoint and credentials, verify five-minute login/send evidence and alert delivery, reconcile provider cost with `usage.events`, and publish M1 SLO dashboards.
 
