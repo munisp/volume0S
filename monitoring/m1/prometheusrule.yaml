@@ -62,14 +62,28 @@ spec:
         - record: volumeos:campaign_dispatch_success_ratio:cycle
           expr: |
             (
-              sum by (tenant_id, campaign_id, cycle_id) (volumeos_campaign_cycle_dispatches{result="success"})
+              sum by (tenant_id, campaign_id, cycle_id) (
+                max by (tenant_id, campaign_id, cycle_id, channel, result) (volumeos_campaign_cycle_dispatches{result="success"})
+              )
               /
-              clamp_min(sum by (tenant_id, campaign_id, cycle_id) (volumeos_campaign_cycle_dispatches), 0.000000001)
+              clamp_min(
+                sum by (tenant_id, campaign_id, cycle_id) (
+                  max by (tenant_id, campaign_id, cycle_id, channel, result) (volumeos_campaign_cycle_dispatches)
+                ),
+                0.000000001
+              )
             )
             and
-            (sum by (tenant_id, campaign_id, cycle_id) (volumeos_campaign_cycle_dispatches) > 0)
+            (
+              sum by (tenant_id, campaign_id, cycle_id) (
+                max by (tenant_id, campaign_id, cycle_id, channel, result) (volumeos_campaign_cycle_dispatches)
+              ) > 0
+            )
         - alert: VolumeOSCampaignCycleSLAViolation
-          expr: volumeos:campaign_dispatch_success_ratio:cycle < 0.99
+          expr: |
+            (volumeos:campaign_dispatch_success_ratio:cycle < 0.99)
+            and
+            (max by (tenant_id, campaign_id, cycle_id) (volumeos_campaign_cycle_completed_timestamp_seconds) > time() - 3600)
           labels: {severity: page, requirement: BR-18}
           annotations:
             summary: Campaign cycle is below the 99% dispatch SLA
