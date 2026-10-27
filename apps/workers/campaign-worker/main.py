@@ -208,17 +208,28 @@ class CampaignWorkflow:
         try:
             await workflow.wait_condition(lambda: self._approval is not None, timeout=timedelta(hours=24))
         except asyncio.TimeoutError:
-            await workflow.execute_activity(record_campaign_approval, "timeout", **activity_options)
+            try:
+                await workflow.execute_activity(record_campaign_approval, "timeout", **activity_options)
+            except Exception as exc:
+                workflow.logger.warning("approval metric recording failed: %s", exc)
             return "approval_timed_out"
         approval = self._approval
         assert approval is not None
-        await workflow.execute_activity(record_campaign_approval, "approved", **activity_options)
+        try:
+            await workflow.execute_activity(record_campaign_approval, "approved", **activity_options)
+        except Exception as exc:
+            workflow.logger.warning("approval metric recording failed: %s", exc)
         reservation_id = await workflow.execute_activity(reserve_budget, value, **activity_options)
         try:
             outcome = await workflow.execute_activity(
                 dispatch_campaign, args=[value, draft_id, approval.approval_id], **activity_options
             )
-            await workflow.execute_activity(record_campaign_cycle, args=[value, outcome], **activity_options)
+            try:
+                await workflow.execute_activity(record_campaign_cycle, args=[value, outcome], **activity_options)
+            except Exception as exc:
+                # Metrics are operational side effects and must not void an
+                # already-dispatched campaign or change its financial outcome.
+                workflow.logger.warning("campaign cycle metric recording failed: %s", exc)
             await workflow.execute_activity(
                 settle_budget, args=[value, reservation_id, "post"], **activity_options
             )
