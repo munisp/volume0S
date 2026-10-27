@@ -1,0 +1,11 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: svc-tenancy
+  namespace: ops
+  labels: {release: prometheus-grafana, app.kubernetes.io/part-of: volumeos}
+spec:
+  namespaceSelector: {matchNames: [core]}
+  selector: {matchLabels: {app.kubernetes.io/name: svc-tenancy}}
+  endpoints:
+    - {port: http, path: /metrics, interval: 30s, scrapeTimeout: 10s}
