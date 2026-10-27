@@ -17,7 +17,11 @@ for path in yaml_files:
 
 # The ComfyUI graph is a pre-render template containing {{image_count}} and is
 # validated by its Studio tests after substitution rather than as raw JSON.
-json_files = [p for p in ROOT.rglob("*.json") if ".git" not in p.parts and p.name != "shopfront-img2img-v1.json"]
+json_files = [
+    p for p in ROOT.rglob("*.json")
+    if ".git" not in p.parts and "node_modules" not in p.parts
+    and p.name != "shopfront-img2img-v1.json" and not p.name.startswith("tsconfig")
+]
 for path in json_files:
     try:
         json.loads(path.read_text())
@@ -235,6 +239,58 @@ for required in (
 ):
     if required not in image_delivery_text:
         errors.append(f"M1 image delivery is missing fail-closed contract {required}")
+
+# The M1 console must preserve its authentication, preview-isolation, and
+# network-only API boundaries as source evolves.
+console = ROOT / "apps/console"
+for relative in (
+    "package.json", "vite.config.ts", "src/App.tsx",
+    "src/lib/api.ts", "src/lib/auth.ts", "src/lib/config.ts", "src/sw.ts",
+    "public/runtime-config.json", "scripts/generate-icons.mjs",
+):
+    if not (console / relative).is_file():
+        errors.append(f"apps/console: missing {relative}")
+console_contracts = {
+    "src/App.tsx": (
+        "setCampaigns([])", "setPacks([])", "key={campaign.id}",
+        "No live campaign cycles loaded", "No live Studio packs loaded",
+        "Illustrative preview queue · no live actions", "previouslyFocused?.focus()",
+    ),
+    "src/lib/api.ts": (
+        "cache: 'no-store'", "credentials: 'omit'", "AbortSignal.timeout(15000)",
+        "headers.Authorization = `Bearer ${accessToken}`",
+    ),
+    "src/lib/auth.ts": (
+        "response_type: 'code'", "window.sessionStorage", "automaticSilentRenew: false",
+    ),
+    "src/lib/config.ts": ("cache: 'no-store'",),
+    "vite.config.ts": ("strategies: 'injectManifest'", "globIgnores: ['runtime-config.json']"),
+    "src/sw.ts": ("precacheAndRoute(self.__WB_MANIFEST)",),
+}
+for relative, required_values in console_contracts.items():
+    path = console / relative
+    if not path.is_file():
+        continue
+    text = path.read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"apps/console/{relative}: missing safety contract {required}")
+for path in (console / "src").rglob("*"):
+    if path.is_file() and path.suffix in {".ts", ".tsx"}:
+        text = path.read_text()
+        for forbidden in ("localStorage", "client_secret", "kimi-plugin-inspect-react"):
+            if forbidden in text:
+                errors.append(f"{path.relative_to(ROOT)}: forbidden console boundary {forbidden}")
+runtime_config = json.loads((console / "public/runtime-config.json").read_text())
+if any((runtime_config.get("coreApiUrl"), runtime_config.get("orchestratorApiUrl"), runtime_config["oidc"].get("authority"), runtime_config["oidc"].get("clientId"))):
+    errors.append("apps/console: source runtime configuration must not contain deployment endpoints")
+console_package = json.loads((console / "package.json").read_text())
+if console_package.get("scripts", {}).get("prebuild") != "npm run icons":
+    errors.append("apps/console: production build must regenerate PWA icons from reviewed source")
+icon_generator = (console / "scripts/generate-icons.mjs").read_text()
+for required in ("deflateSync", "crc32", "apple-touch-icon.png", "pwa-192.png", "pwa-512.png", "pwa-maskable-512.png"):
+    if required not in icon_generator:
+        errors.append(f"apps/console: icon generator is missing {required}")
 
 if errors:
     print("\n".join(f"ERROR {e}" for e in errors), file=sys.stderr)
