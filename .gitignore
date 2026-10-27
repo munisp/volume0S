@@ -11,3 +11,5 @@ build/
 .env.*
 !.env.example
 coverage.out
+acceptance-evidence/
+volumeos-evidence/
