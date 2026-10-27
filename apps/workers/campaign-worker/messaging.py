@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import httpx
 from temporalio.exceptions import ApplicationError
+
+import metrics
 
 TENANT_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
 ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
@@ -101,9 +104,15 @@ class GuardedDispatcher:
             provider = self._providers[value.channel]
         except KeyError as exc:
             raise ApplicationError("provider is not configured", non_retryable=True) from exc
-        result = await provider.send(value, key)
-        if not result.provider_id.strip() or result.cost_minor < 0:
-            raise ApplicationError("provider returned an invalid result")
+        started = time.perf_counter()
+        try:
+            result = await provider.send(value, key)
+            if not result.provider_id.strip() or result.cost_minor < 0:
+                raise ApplicationError("provider returned an invalid result")
+        except BaseException:
+            metrics.observe_dispatch(value.channel, "failure", time.perf_counter() - started)
+            raise
+        metrics.observe_dispatch(value.channel, "success", time.perf_counter() - started)
         await self._store.put(key, result)
         await self._usage.emit(UsageEvent(
             event_id=f"dispatch:{key}", tenant_id=value.tenant_id,
