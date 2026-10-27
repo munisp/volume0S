@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "milestone": "M1",
+  "checks": [
+    {
+      "id": "ONB-001",
+      "requirements": ["BR-5", "FR-FLW-1"],
+      "title": "Complete real onboarding within one business day",
+      "evidence": "Timestamps, tenant/workflow identifiers, provider responses, and audit events. Do not include credentials or recipient addresses."
+    },
+    {
+      "id": "ONB-002",
+      "requirements": ["FR-FLW-1", "NFR-12"],
+      "title": "Inject onboarding failures and verify ownership-safe compensation",
+      "evidence": "Failure-injection plan, workflow history, compensation audit, reused Keycloak client survival, and proof that customer-owned Postiz integrations were not deleted."
+    },
+    {
+      "id": "MSG-001",
+      "requirements": ["BR-10", "BR-18", "FR-FLW-2"],
+      "title": "Run approved Content Cadence delivery across email, SMS, WhatsApp, and social",
+      "evidence": "Campaign/cycle identifiers, approval records, provider receipts, delivery webhooks, and per-cycle success counts for all four channels."
+    },
+    {
+      "id": "MSG-002",
+      "requirements": ["BR-10", "P8"],
+      "title": "Prove unapproved or rejected content produces zero provider calls",
+      "evidence": "Workflow history and provider audit showing no dispatch before approval and after rejection or approval timeout."
+    },
+    {
+      "id": "MSG-003",
+      "requirements": ["FR-MSG-6", "NDPR"],
+      "title": "Prove persistent suppression produces zero provider calls",
+      "evidence": "Suppression test record digest, authorization denial, PostgreSQL persistence check, and provider audit with no recipient addresses or HMAC secret."
+    },
+    {
+      "id": "MSG-004",
+      "requirements": ["BR-24", "FR-MSG-7"],
+      "title": "Suspend outbound messaging within five minutes and produce zero later provider calls",
+      "evidence": "Suspension and attempted-dispatch timestamps, denial reason, and provider audit demonstrating the five-minute limit."
+    },
+    {
+      "id": "MSG-005",
+      "requirements": ["P5", "P7", "FR-MSG-5"],
+      "title": "Verify dispatch replay, conflicting-replay rejection, and cross-tenant isolation in staging",
+      "evidence": "Idempotency keys, safe replay response, conflict response, cross-tenant denial, and exactly-once provider/usage reconciliation."
+    },
+    {
+      "id": "STU-001",
+      "requirements": ["FR-AI-4", "BR-10"],
+      "title": "Generate a real GPU-backed Studio pack in all contracted formats",
+      "evidence": "Model/runtime versions, GPU node identifier, ComfyUI job ID, graph version, output hashes, dimensions, and tenant-prefixed object keys."
+    },
+    {
+      "id": "STU-002",
+      "requirements": ["FR-AI-2", "FR-AI-4", "BR-10"],
+      "title": "Reject a Studio asset and prove it never reaches delivery",
+      "evidence": "QA rejection reason, workflow history, object-prefix listing, and delivery audit showing no rejected asset delivery."
+    },
+    {
+      "id": "STU-003",
+      "requirements": ["BR-5", "BR-9"],
+      "title": "Deliver the first client report within 48 hours of signup",
+      "evidence": "Signup, report-generation, approval, and delivery timestamps with tenant and report identifiers."
+    },
+    {
+      "id": "SEC-001",
+      "requirements": ["FR-IDN-3", "FR-IDN-4", "FR-EDGE-2", "P5"],
+      "title": "Verify MFA, OIDC edge enforcement, invalid-token denial, and cross-tenant denial",
+      "evidence": "Sanitized OIDC configuration, MFA policy, positive/negative request results, and audit logs without tokens."
+    },
+    {
+      "id": "SEC-002",
+      "requirements": ["FR-OBS-3", "NFR-7"],
+      "title": "Replace Wazuh bootstrap secrets and pass the purple-team drill",
+      "evidence": "Secret-pipeline review, certificate rotation record, four attack scenarios, and at least three detected alerts mapped to MITRE ATT&CK."
+    },
+    {
+      "id": "DR-001",
+      "requirements": ["BR-23", "NFR-3", "NFR-4"],
+      "title": "Restore M1 state with RPO at most 15 minutes and RTO at most 4 hours",
+      "evidence": "Dated quarterly drill for PostgreSQL, MinIO, Keycloak, and cluster state; backup/restore timestamps, data-loss measurement, validation queries, and next drill date. TigerBeetle joins this drill in M2."
+    },
+    {
+      "id": "OBS-001",
+      "requirements": ["FR-OBS-2", "NFR-2"],
+      "title": "Validate live M1 SLO metrics, alerts, dashboards, and a monthly report",
+      "evidence": "Metric-contract implementation revision, Prometheus query output, alert test, dashboard screenshots/export, and monthly Core API 99.5% plus per-cycle dispatch 99% calculations."
+    },
+    {
+      "id": "OBS-002",
+      "requirements": ["FR-OBS-6", "BR-18"],
+      "title": "Run login and send synthetic journeys every five minutes with on-call alerts",
+      "evidence": "Probe configuration, at least one five-minute interval sample series, alert delivery, and monthly report. The pay journey is an M2 gate and must not be reported as M1 evidence."
+    },
+    {
+      "id": "COST-001",
+      "requirements": ["BR-4", "FR-MSG-5", "FR-OBS-5"],
+      "title": "Reconcile provider charges with tenant/channel/campaign usage",
+      "evidence": "Provider invoice or sandbox statement, sanitized usage export, NGN-minor-unit/currency reconciliation, variances, and operator sign-off."
+    }
+  ]
+}
