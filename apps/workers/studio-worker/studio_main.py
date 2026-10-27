@@ -7,7 +7,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -19,6 +19,8 @@ from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
+
+import metrics
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
 PACK_IMAGES = {"starter": 5, "growth": 7, "pro": 12}
@@ -237,6 +239,15 @@ async def deliver_studio_pack(value: StudioInput, qa_keys: list[str], review: QA
     return delivered
 
 
+@activity.defn
+def record_studio_outcome(result: StudioResult, started_at: datetime) -> None:
+    outcome = "failed" if result.status in {"failed", "qa_timed_out"} else result.status
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+    metrics.record_outcome(outcome, duration)
+
+
 @workflow.defn
 class StudioWorkflow:
     def __init__(self) -> None:
@@ -252,6 +263,22 @@ class StudioWorkflow:
 
     @workflow.run
     async def run(self, value: StudioInput) -> StudioResult:
+        started_at = workflow.now()
+        options = {
+            "start_to_close_timeout": timedelta(minutes=2),
+            "retry_policy": RetryPolicy(maximum_attempts=3),
+        }
+        try:
+            result = await self._execute(value)
+        except BaseException:
+            await workflow.execute_activity(
+                record_studio_outcome, args=[StudioResult(value.pack_id, "failed", []), started_at], **options
+            )
+            raise
+        await workflow.execute_activity(record_studio_outcome, args=[result, started_at], **options)
+        return result
+
+    async def _execute(self, value: StudioInput) -> StudioResult:
         validate_studio(value)
         options = {
             "start_to_close_timeout": timedelta(minutes=12),
@@ -275,6 +302,7 @@ class StudioWorkflow:
 
 
 async def main() -> None:
+    metrics.start_server(int(os.environ.get("METRICS_PORT", "9091")))
     client = await Client.connect(
         os.environ.get("TEMPORAL_HOSTPORT", "temporal-frontend.ops.svc.cluster.local:7233"),
         namespace=os.environ.get("TEMPORAL_NAMESPACE", "volumeos"),
@@ -282,7 +310,7 @@ async def main() -> None:
     worker = Worker(client, task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "studio-v1"),
                     workflows=[StudioWorkflow],
                     activities=[submit_studio_pack, wait_studio_pack, store_qa_assets,
-                                record_studio_rejection, deliver_studio_pack])
+                                record_studio_rejection, deliver_studio_pack, record_studio_outcome])
     await worker.run()
 
 
