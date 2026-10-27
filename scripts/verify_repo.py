@@ -84,6 +84,8 @@ for env in ("dev", "stage", "prod"):
             errors.append(f"{path.relative_to(ROOT)}: missing resource {resource}")
     if "../../../apps/core/svc-provisioning/k8s" not in resources:
         errors.append(f"{path.relative_to(ROOT)}: svc-provisioning is not deployed")
+    if "../../../apps/core/svc-orchestrator/k8s" not in resources:
+        errors.append(f"{path.relative_to(ROOT)}: svc-orchestrator is not deployed")
 
 messaging_migration = ROOT / "apps/core/svc-tenancy/migrations/002_messaging.sql"
 migration_text = messaging_migration.read_text()
@@ -191,6 +193,7 @@ for relative, required_values in workflow_isolation_contracts.items():
 
 for relative, image in (
     ("apps/core/svc-tenancy/k8s/deployment.yaml", "ghcr.io/munisp/svc-tenancy:0.2.0"),
+    ("apps/core/svc-orchestrator/k8s/deployment.yaml", "ghcr.io/munisp/svc-orchestrator:0.3.0"),
     ("apps/workers/campaign-worker/k8s/deployment.yaml", "ghcr.io/munisp/campaign-worker:0.2.0"),
     ("apps/workers/studio-worker/k8s/deployment.yaml", "ghcr.io/munisp/studio-worker:0.2.0"),
     ("apps/workers/synthetic-probe/k8s/deployment.yaml", "ghcr.io/munisp/synthetic-probe:0.1.0"),
@@ -223,12 +226,14 @@ for path in ROOT.rglob("Dockerfile"):
     if re.search(r"FROM\s+\S+:latest", text):
         errors.append(f"{path.relative_to(ROOT)}: floating base image")
 
-for worker in ("campaign-worker", "studio-worker", "synthetic-probe"):
-    dockerfile = ROOT / f"apps/workers/{worker}/Dockerfile"
+python_tested_images = [ROOT / f"apps/workers/{worker}/Dockerfile" for worker in
+                        ("campaign-worker", "studio-worker", "synthetic-probe")]
+python_tested_images.append(ROOT / "apps/core/svc-orchestrator/Dockerfile")
+for dockerfile in python_tested_images:
     text = dockerfile.read_text()
     for required in ("python -m pytest && touch /tests-passed", "COPY --from=test /tests-passed /app/.tests-passed"):
         if required not in text:
-            errors.append(f"{worker}: runtime image does not require its test stage: {required}")
+            errors.append(f"{dockerfile.relative_to(ROOT)}: runtime image does not require its test stage: {required}")
 image_delivery = ROOT / "scripts/m1_image_delivery.py"
 image_delivery_text = image_delivery.read_text()
 for required in (
@@ -239,6 +244,72 @@ for required in (
 ):
     if required not in image_delivery_text:
         errors.append(f"M1 image delivery is missing fail-closed contract {required}")
+
+# The orchestrator must expose real tenant-scoped Temporal reads and mutations,
+# not a second queue database. Studio review remains bound to the exact objects
+# and manifest that a human reviewed.
+orchestrator = ROOT / "apps/core/svc-orchestrator"
+for relative in (
+    "main.py", "auth.py", "assets.py", "workflows.py", "pyproject.toml",
+    "Dockerfile", "k8s/deployment.yaml", "k8s/kustomization.yaml",
+    "tests/test_api.py", "tests/test_assets.py", "tests/test_auth.py",
+):
+    if not (orchestrator / relative).is_file():
+        errors.append(f"apps/core/svc-orchestrator: missing {relative}")
+orchestrator_contracts = {
+    "auth.py": (
+        'header.get("alg") != "RS256"', 'algorithms=["RS256"]',
+        'options={"require": ["exp", "tenant_id", "sub"]}', "return Claims(tenant_id, actor, role_set)",
+    ),
+    "workflows.py": (
+        'await handle.query("status")', "WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE",
+        'WorkflowId STARTS_WITH', "QUEUE_LIMIT = 100",
+    ),
+    "main.py": (
+        'ConfigDict(extra="forbid"', 'f"campaign:{claims.tenant_id}:{body.campaign_id}"',
+        'f"studio:{claims.tenant_id}:{body.pack_id}"', '"approver": claims.actor',
+        '"reviewer": claims.actor', 'snapshot.get("manifest_sha256") != body.manifest_sha256',
+        'await app.state.qa_assets.validate_manifest(', 'response.headers["Cache-Control"] = "no-store"',
+    ),
+    "assets.py": (
+        "hmac.compare_digest(actual_sha256, expected_sha256)", 'ResponseCacheControl": "no-store"',
+        "expires_seconds < 60 or expires_seconds > 900", 'head.get("ContentType") != "image/png"',
+    ),
+}
+for relative, required_values in orchestrator_contracts.items():
+    path = orchestrator / relative
+    if not path.is_file():
+        continue
+    text = path.read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"apps/core/svc-orchestrator/{relative}: missing safety contract {required}")
+platform_config = (ROOT / "bootstrap/platform/config.yaml").read_text()
+for required in ("name: svc-orchestrator", "https://console.volumeos.example.com", "allow_credential: false"):
+    if required not in platform_config:
+        errors.append(f"APISIX orchestrator route/CORS is missing {required}")
+network_policy = (ROOT / "policies/default-deny-networkpolicy.yaml").read_text()
+for required in (
+    "name: allow-edge-core-ingress", "values: [svc-tenancy, svc-orchestrator]",
+    "name: allow-orchestrator-dependencies", "{protocol: TCP, port: 7233}", "{protocol: TCP, port: 9000}",
+):
+    if required not in network_policy:
+        errors.append(f"orchestrator NetworkPolicy is missing {required}")
+for required in ('"svc-orchestrator"', '("core", "svc-orchestrator")', '("workers", "studio-worker")'):
+    if required not in acceptance_preflight:
+        errors.append(f"staging preflight is missing orchestrator/object-store gate {required}")
+workflow_query_contracts = {
+    "apps/workers/campaign-worker/main.py": ("def status(self) -> CampaignStatus:", 'self._status != "awaiting_approval"'),
+    "apps/workers/studio-worker/studio_main.py": (
+        "def status(self) -> StudioStatus:", "hmac.compare_digest(actual_sha256, review.manifest_sha256)",
+        "hmac.compare_digest(review.manifest_sha256, self._manifest_sha256)",
+    ),
+}
+for relative, required_values in workflow_query_contracts.items():
+    text = (ROOT / relative).read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"{relative}: missing live query/review contract {required}")
 
 # The M1 console must preserve its authentication, preview-isolation, and
 # network-only API boundaries as source evolves.
@@ -255,6 +326,10 @@ console_contracts = {
         "setCampaigns([])", "setPacks([])", "key={campaign.id}",
         "No live campaign cycles loaded", "No live Studio packs loaded",
         "Illustrative preview queue · no live actions", "previouslyFocused?.focus()",
+        "Promise.all([api.campaigns(), api.studioPacks()])", "await refreshWorkflows()",
+        "qaManifest === currentPack.manifestSha256", "qaAssets.every(asset => loadedQaAssets[asset.id])",
+        "qaTargetAssetCount, qaReloadToken]", "Refresh signed asset URLs",
+        "disabled={!connected || busy || pack.status !== 'awaiting_qa' || !qaReviewReady}",
     ),
     "src/lib/api.ts": (
         "cache: 'no-store'", "credentials: 'omit'", "AbortSignal.timeout(15000)",

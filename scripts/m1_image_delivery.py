@@ -27,6 +27,7 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 IMAGES = (
     {"name": "svc-tenancy", "tag": "0.2.0", "context": "apps/core/svc-tenancy", "user": "65532:65532"},
     {"name": "svc-provisioning", "tag": "0.1.0", "context": "apps/core/svc-provisioning", "user": "65532:65532"},
+    {"name": "svc-orchestrator", "tag": "0.3.0", "context": "apps/core/svc-orchestrator", "user": "10001"},
     {"name": "campaign-worker", "tag": "0.2.0", "context": "apps/workers/campaign-worker", "user": "10001"},
     {"name": "studio-worker", "tag": "0.2.0", "context": "apps/workers/studio-worker", "user": "10001"},
     {"name": "synthetic-probe", "tag": "0.1.0", "context": "apps/workers/synthetic-probe", "user": "10001"},
@@ -129,7 +130,7 @@ def require_report(path: Path, status: str, revision: str) -> dict[str, Any]:
 def verify_unchanged(tools: Tools, report: dict[str, Any]) -> None:
     entries = report.get("images")
     if not isinstance(entries, dict) or set(entries) != {item["name"] for item in IMAGES}:
-        raise RuntimeError("delivery report does not contain exactly the five M1 images")
+        raise RuntimeError(f"delivery report does not contain exactly the {len(IMAGES)} M1 images")
     for image in IMAGES:
         current = inspect_current(tools, image, str(report["source_revision"]))
         recorded = entries[image["name"]]
@@ -198,7 +199,7 @@ def http_body(port: int, path: str, expected: str) -> None:
 def smoke_service(tools: Tools, image: dict[str, str], checks: list[dict[str, str]]) -> None:
     name = "volumeos-smoke-" + uuid.uuid4().hex[:12]
     port = free_port()
-    is_core = image["name"] == "svc-tenancy"
+    is_core = image["name"] in {"svc-tenancy", "svc-orchestrator"}
     command = [] if is_core else [
         "python", "-c", "import metrics,time; metrics.start_server(9091); time.sleep(120)",
     ]
@@ -207,13 +208,23 @@ def smoke_service(tools: Tools, image: dict[str, str], checks: list[dict[str, st
         "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128",
         "--publish", f"127.0.0.1:{port}:8080" if is_core else f"127.0.0.1:{port}:9091",
     ]
-    if is_core:
+    if image["name"] == "svc-tenancy":
         run_args += ["--env", "STORE=memory", "--env", "VO_ENV=dev", "--env", "PORT=8080"]
+    if image["name"] == "svc-orchestrator":
+        # Synthetic startup-only values exercise the real ASGI health endpoint;
+        # no identity, Temporal, or object-storage call is treated as accepted.
+        run_args += [
+            "--env", "OIDC_ISSUER=https://identity.invalid/realms/volumeos",
+            "--env", "OIDC_AUDIENCE=core-services", "--env", "OIDC_JWKS_URL=https://identity.invalid/jwks",
+            "--env", "ASSET_BUCKET=assets", "--env", "AWS_ACCESS_KEY_ID=smoke",
+            "--env", "AWS_SECRET_ACCESS_KEY=smoke", "--env", "TEMPORAL_HOSTPORT=127.0.0.1:7233",
+        ]
     try:
         tools.check([*run_args, reference(image), *command], timeout=30)
         if is_core:
             http_body(port, "/healthz", '"status":"ok"')
-            http_body(port, "/metrics", "volumeos_http_requests_total")
+            if image["name"] == "svc-tenancy":
+                http_body(port, "/metrics", "volumeos_http_requests_total")
         else:
             metric = "volumeos_campaign_approvals_total" if image["name"] == "campaign-worker" else "volumeos_studio_packs_total"
             http_body(port, "/metrics", metric)
@@ -246,7 +257,7 @@ def smoke(args: argparse.Namespace) -> int:
     save_json(output / "smoke.json", report)
     try:
         for image in IMAGES:
-            if image["name"] in {"svc-tenancy", "campaign-worker", "studio-worker"}:
+            if image["name"] in {"svc-tenancy", "svc-orchestrator", "campaign-worker", "studio-worker"}:
                 smoke_service(tools, image, report["checks"])
             else:
                 expect_startup_failure(tools, image, report["checks"])
@@ -302,7 +313,7 @@ def verify(args: argparse.Namespace) -> int:
     report = require_report(output / "images.json", "published", args.source_revision)
     entries = report.get("images")
     if not isinstance(entries, dict) or set(entries) != {image["name"] for image in IMAGES}:
-        raise RuntimeError("publication report does not contain exactly the five M1 images")
+        raise RuntimeError("publication report does not contain exactly the M1 images")
     for image in IMAGES:
         entry = entries[image["name"]]
         ref = reference(image)
@@ -317,7 +328,7 @@ def verify(args: argparse.Namespace) -> int:
         "verified_at": now(), "images": entries,
     }
     save_json(output / "verification.json", verification)
-    print("Verified all five registry digests against the publication report")
+    print(f"Verified all {len(IMAGES)} registry digests against the publication report")
     return 0
 
 
