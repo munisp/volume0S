@@ -20,7 +20,8 @@ spec:
             passwordKey: admin-password
         prometheus:
           prometheusSpec:
-            retention: 30d
+            # Cover any calendar month plus reporting/scrape lag for NFR-2.
+            retention: 45d
             storageSpec:
               volumeClaimTemplate:
                 spec:
