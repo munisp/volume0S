@@ -5,6 +5,7 @@ resources:
   - ../../../apps/core/svc-provisioning/k8s
   - ../../../apps/workers/campaign-worker/k8s
   - ../../../apps/workers/studio-worker/k8s
+  - ../../../apps/workers/synthetic-probe/k8s
   - ../../../policies
 labels:
   - includeSelectors: true
