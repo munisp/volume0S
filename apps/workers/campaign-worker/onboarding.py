@@ -27,6 +27,7 @@ class OnboardingInput:
     slug: str
     corridor: str
     offers: list[str]
+    postiz_integration_id: str | None = None
 
 
 @dataclass
@@ -44,13 +45,19 @@ def validate_onboarding(value: OnboardingInput) -> None:
         raise ApplicationError("valid tenant name and slug are required", non_retryable=True)
     if not value.offers or any(offer not in {"01", "02", "06"} for offer in value.offers):
         raise ApplicationError("M1 onboarding requires offers 01, 02, or 06", non_retryable=True)
+    if "02" in value.offers and (
+        value.postiz_integration_id is None or not SAFE_ID.fullmatch(value.postiz_integration_id)
+    ):
+        raise ApplicationError("a connected Postiz integration is required for offer 02", non_retryable=True)
 
 
 def saga_compensations(completed: list[str]) -> list[str]:
     order = ["identity", "tenancy", "listmonk", "postiz", "active", "welcome"]
     if any(step not in order for step in completed):
         raise ValueError("unknown saga step")
-    return [f"undo:{step}" for step in reversed(completed) if step in {"identity", "tenancy", "listmonk", "postiz"}]
+    # Postiz validation is read-only: the customer-owned OAuth integration must
+    # never be deleted by onboarding compensation.
+    return [f"undo:{step}" for step in reversed(completed) if step in {"identity", "tenancy", "listmonk"}]
 
 
 async def request(service_env: str, method: str, path: str, tenant_id: str, key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -90,9 +97,17 @@ async def provision(value: OnboardingInput, step: str, service_env: str, path: s
 
 @activity.defn
 async def provision_identity(value: OnboardingInput) -> str:
-    return await provision(value, "identity", "IDENTITY_ADMIN_URL", "/v1/tenants", {
-        "tenant_id": value.tenant_id, "name": value.name, "corridor": value.corridor,
-    }, "client_id")
+    activity.heartbeat()
+    result = await request("IDENTITY_ADMIN_URL", "POST", "/v1/tenants", value.tenant_id,
+                           f"onboarding:{value.tenant_id}:identity", {
+                               "tenant_id": value.tenant_id, "name": value.name, "corridor": value.corridor,
+                           })
+    client_id = str(result.get("client_id") or result.get("data", {}).get("id") or "")
+    if not client_id:
+        raise ApplicationError("identity response is missing client_id")
+    # Only a client created by this attempt may be deleted during compensation.
+    # An empty resource marker preserves a pre-existing Keycloak client on retry.
+    return client_id if result.get("created") is True else ""
 
 
 @activity.defn
@@ -117,9 +132,11 @@ async def initialize_listmonk(value: OnboardingInput) -> str:
 
 @activity.defn
 async def initialize_postiz(value: OnboardingInput) -> str:
-    # A reviewed internal provisioner owns provider credentials and channel setup.
+    # The provisioner validates the customer's existing OAuth connection using a
+    # tenant-scoped Dapr secret; it neither creates nor owns that connection.
     return await provision(value, "postiz", "POSTIZ_PROVISIONER_URL", "/v1/tenant-channels", {
-        "tenant_id": value.tenant_id, "offers": value.offers,
+        "tenant_id": value.tenant_id, "integration_id": value.postiz_integration_id,
+        "offers": value.offers,
     }, "channel_id")
 
 
@@ -142,8 +159,9 @@ async def send_welcome(value: OnboardingInput) -> str:
 
 @activity.defn
 async def compensate_onboarding(value: OnboardingInput, compensation: str, resource_id: str) -> None:
+    if compensation == "undo:identity" and not resource_id:
+        return
     targets = {
-        "undo:postiz": ("POSTIZ_PROVISIONER_URL", "DELETE", "/v1/tenant-channels/" + resource_id),
         "undo:listmonk": ("LISTMONK_ADMIN_URL", "DELETE", "/api/lists/" + resource_id),
         "undo:identity": ("IDENTITY_ADMIN_URL", "DELETE", "/v1/tenants/" + value.tenant_id),
     }
