@@ -143,13 +143,15 @@ func (k *KeycloakClient) find(ctx context.Context, tenantID string) (*keycloakCl
 	return nil, nil
 }
 
-func (k *KeycloakClient) EnsureTenant(ctx context.Context, tenantID, name, corridor string) (string, error) {
+func (k *KeycloakClient) EnsureTenant(ctx context.Context, tenantID, name, corridor string) (string, bool, error) {
 	existing, err := k.find(ctx, tenantID)
 	if err != nil || existing != nil {
 		if existing != nil {
-			return existing.ClientID, nil
+			// Reused clients are not owned by this onboarding attempt and must
+			// survive any later saga compensation.
+			return existing.ClientID, false, nil
 		}
-		return "", err
+		return "", false, err
 	}
 	payload := map[string]any{
 		"clientId": tenantClientID(tenantID), "name": name, "description": "VolumeOS tenant " + tenantID,
@@ -166,16 +168,16 @@ func (k *KeycloakClient) EnsureTenant(ctx context.Context, tenantID, name, corri
 	}
 	_, status, err := k.request(ctx, http.MethodPost, "/clients", nil, payload)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if status != http.StatusCreated && status != http.StatusConflict {
-		return "", fmt.Errorf("Keycloak client creation returned %d", status)
+		return "", false, fmt.Errorf("Keycloak client creation returned %d", status)
 	}
 	created, err := k.find(ctx, tenantID)
 	if err != nil || created == nil {
-		return "", errors.New("Keycloak client creation could not be confirmed")
+		return "", false, errors.New("Keycloak client creation could not be confirmed")
 	}
-	return created.ClientID, nil
+	return created.ClientID, status == http.StatusCreated, nil
 }
 
 func (k *KeycloakClient) DeleteTenant(ctx context.Context, tenantID string) error {
