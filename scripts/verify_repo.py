@@ -219,6 +219,23 @@ for path in ROOT.rglob("Dockerfile"):
     if re.search(r"FROM\s+\S+:latest", text):
         errors.append(f"{path.relative_to(ROOT)}: floating base image")
 
+for worker in ("campaign-worker", "studio-worker", "synthetic-probe"):
+    dockerfile = ROOT / f"apps/workers/{worker}/Dockerfile"
+    text = dockerfile.read_text()
+    for required in ("python -m pytest && touch /tests-passed", "COPY --from=test /tests-passed /app/.tests-passed"):
+        if required not in text:
+            errors.append(f"{worker}: runtime image does not require its test stage: {required}")
+image_delivery = ROOT / "scripts/m1_image_delivery.py"
+image_delivery_text = image_delivery.read_text()
+for required in (
+    '"build", "--pull=always", "--no-cache"', '("smoke", smoke), ("publish", publish), ("verify", verify)',
+    '"--read-only", "--cap-drop=ALL"', 'require_report(output / "smoke.json", "passed"',
+    '"inspect", "--format", "{{.Digest}}"', 'tools.remote_digest(ref) != entry["digest"]',
+    'org.opencontainers.image.revision=', '"pinned": f"{ref}@{digest}"',
+):
+    if required not in image_delivery_text:
+        errors.append(f"M1 image delivery is missing fail-closed contract {required}")
+
 if errors:
     print("\n".join(f"ERROR {e}" for e in errors), file=sys.stderr)
     sys.exit(1)
