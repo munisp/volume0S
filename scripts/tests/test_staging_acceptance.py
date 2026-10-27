@@ -79,14 +79,15 @@ class StagingAcceptanceTests(unittest.TestCase):
             }))
             expected = {
                 "core": {"svc-tenancy", "svc-provisioning", "listmonk", "postiz"},
-                "workers": {"campaign-worker"},
+                "workers": {"campaign-worker", "studio-worker", "synthetic-probe"},
                 "ai": {"comfyui"},
             }
             secret_keys = {
-                "svc-tenancy": {"database-url", "service-token", "suppression-hmac-secret"},
-                "svc-provisioning": {"service-token", "keycloak-admin-client-id", "keycloak-admin-client-secret"},
-                "listmonk-admin": {"admin-password"},
-                "postiz": {"DATABASE_URL", "REDIS_URL", "JWT_SECRET"},
+                ("core", "svc-tenancy"): {"database-url", "service-token", "suppression-hmac-secret"},
+                ("core", "svc-provisioning"): {"service-token", "keycloak-admin-client-id", "keycloak-admin-client-secret"},
+                ("core", "listmonk-admin"): {"admin-password"},
+                ("core", "postiz"): {"DATABASE_URL", "REDIS_URL", "JWT_SECRET"},
+                ("workers", "synthetic-probe"): {"client-id", "client-secret", "service-token"},
             }
 
             def fake_get(_self, args):
@@ -101,9 +102,9 @@ class StagingAcceptanceTests(unittest.TestCase):
                     } for name in expected[namespace]]
                     return 0, {"items": items}
                 if len(args) >= 5 and args[2:4] == ["get", "secret"]:
-                    name = args[4]
-                    return 0, {"data": {key: "c3VwZXJzZWNyZXQ=" for key in secret_keys[name]}}
-                if "components.dapr.io" in args or "prometheusrule" in args or "configmap" in args:
+                    namespace, name = args[1], args[4]
+                    return 0, {"data": {key: "c3VwZXJzZWNyZXQ=" for key in secret_keys[(namespace, name)]}}
+                if any(kind in args for kind in ("components.dapr.io", "prometheusrule", "configmap", "servicemonitor")):
                     return 0, {"metadata": {"name": args[-1]}}
                 if args[:2] == ["get", "nodes"]:
                     return 0, {"items": [{"metadata": {"name": "gpu-1"}, "status": {"capacity": {"nvidia.com/gpu": "1"}}}]}
