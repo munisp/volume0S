@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Repository-level M0/M1 checks; no Kubernetes cluster credentials required."""
 from pathlib import Path
+import json
 import re
 import sys
 import yaml
@@ -13,6 +14,15 @@ for path in yaml_files:
         list(yaml.safe_load_all(path.read_text()))
     except Exception as exc:
         errors.append(f"{path.relative_to(ROOT)}: invalid YAML: {exc}")
+
+# The ComfyUI graph is a pre-render template containing {{image_count}} and is
+# validated by its Studio tests after substitution rather than as raw JSON.
+json_files = [p for p in ROOT.rglob("*.json") if ".git" not in p.parts and p.name != "shopfront-img2img-v1.json"]
+for path in json_files:
+    try:
+        json.loads(path.read_text())
+    except Exception as exc:
+        errors.append(f"{path.relative_to(ROOT)}: invalid JSON: {exc}")
 
 for path in ROOT.rglob("*"):
     if path.is_file() and ".git" not in path.parts and path.suffix in {".yaml", ".yml", ".go", ".py", ".rs", ".md", ".toml"}:
@@ -40,6 +50,10 @@ else:
         errors.append("Wazuh must not auto-sync before its private secret overlay")
     if wazuh["spec"]["source"].get("targetRevision") != "v4.14.9":
         errors.append("Wazuh must use the reviewed v4.14.9 source")
+
+prometheus_app_text = (apps / "prometheus-grafana.yaml").read_text()
+if "retention: 45d" not in prometheus_app_text:
+    errors.append("Prometheus retention must cover calendar-month SLO reporting plus lag")
 
 postiz_path = ROOT / "bootstrap/m1/postiz/deployment.yaml"
 if postiz_path.exists():
@@ -78,6 +92,46 @@ if '"undo:postiz"' in onboarding_text:
 if "postiz_integration_id" not in onboarding_text:
     errors.append("onboarding must validate an explicit Postiz integration")
 
+acceptance_catalog_path = ROOT / "docs/m1/acceptance/checks.json"
+acceptance_catalog = json.loads(acceptance_catalog_path.read_text())
+acceptance_ids = [check["id"] for check in acceptance_catalog["checks"]]
+if len(acceptance_ids) != len(set(acceptance_ids)):
+    errors.append("M1 acceptance catalog contains duplicate check IDs")
+for required_check in ("ONB-001", "ONB-002", "MSG-001", "MSG-003", "MSG-004", "STU-001", "DR-001", "OBS-001", "OBS-002", "COST-001"):
+    if required_check not in acceptance_ids:
+        errors.append(f"M1 acceptance catalog is missing {required_check}")
+acceptance_script = (ROOT / "scripts/staging_acceptance.py").read_text()
+for required in ('"passed" and not args.evidence', 'preflight.get("status") != "passed"', 'digest(path) != artifact.get("sha256")'):
+    if required not in acceptance_script:
+        errors.append(f"staging acceptance no longer fails closed: {required}")
+
+monitoring_dir = ROOT / "monitoring/m1"
+rule_path = monitoring_dir / "prometheusrule.yaml"
+rule = yaml.safe_load(rule_path.read_text())
+rule_text = rule_path.read_text()
+for required in ("0.072", "0.03", "volumeos:campaign_dispatch_success_ratio:cycle < 0.99", 'absent(volumeos_http_requests_total{service="svc-tenancy"})', 'absent(probe_success{journey="login"}) or absent(probe_success{journey="send"})'):
+    if required not in rule_text:
+        errors.append(f"M1 SLO rule is missing {required}")
+if rule["metadata"]["name"] != "volumeos-m1-slo":
+    errors.append("M1 PrometheusRule name differs from staging preflight")
+dashboard = json.loads((monitoring_dir / "grafana-dashboard.json").read_text())
+if dashboard.get("uid") != "volumeos-m1-slo":
+    errors.append("M1 Grafana dashboard UID is missing or incorrect")
+dashboard_text = json.dumps(dashboard)
+for required in ("0.995", "volumeos:campaign_dispatch_success_ratio:cycle", "probe_success", "volumeos_studio_packs_total"):
+    if required not in dashboard_text:
+        errors.append(f"M1 dashboard is missing {required}")
+monitoring_kustomization_path = monitoring_dir / "kustomization.yaml"
+monitoring_kustomization = yaml.safe_load(monitoring_kustomization_path.read_text())
+for resource in monitoring_kustomization.get("resources", []):
+    if not (monitoring_dir / resource).is_file():
+        errors.append(f"monitoring/m1: missing resource {resource}")
+for generator in monitoring_kustomization.get("configMapGenerator", []):
+    for entry in generator.get("files", []):
+        source = entry.split("=", 1)[-1]
+        if not (monitoring_dir / source).is_file():
+            errors.append(f"monitoring/m1: missing dashboard source {source}")
+
 required_topics = {"usage.events", "message.status", "census.pings", "lead.events", "money.events", "ai.jobs", "audit.publish"}
 text = (ROOT / "bootstrap/platform/kafka-topics.yaml").read_text()
 missing = sorted(topic for topic in required_topics if f"name: {topic}" not in text)
@@ -92,4 +146,4 @@ for path in ROOT.rglob("Dockerfile"):
 if errors:
     print("\n".join(f"ERROR {e}" for e in errors), file=sys.stderr)
     sys.exit(1)
-print(f"OK: {len(yaml_files)} YAML files, {len(list(apps.glob('*.yaml')))} pinned Argo applications, {len(required_topics)} Kafka topics")
+print(f"OK: {len(yaml_files)} YAML files, {len(json_files)} JSON files, {len(acceptance_ids)} M1 acceptance checks, {len(list(apps.glob('*.yaml')))} pinned Argo applications, {len(required_topics)} Kafka topics")
