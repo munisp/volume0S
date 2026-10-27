@@ -1,15 +1,19 @@
 import io
 import json
+from datetime import datetime, timezone
 
 import pytest
 from PIL import Image
 from temporalio.exceptions import ApplicationError
 
+import studio_main as studio
 from studio_main import (
     PACK_IMAGES,
     QAReview,
     S3AssetStore,
     StudioInput,
+    StudioResult,
+    StudioWorkflow,
     deliver_studio_pack,
     delivered_prefix,
     delivery_variants,
@@ -128,3 +132,46 @@ async def test_output_count_must_match_purchased_pack():
 def test_s3_store_requires_bucket():
     with pytest.raises(ValueError):
         S3AssetStore(" ")
+
+
+async def test_successful_delivery_survives_outcome_metric_failure(monkeypatch):
+    expected = StudioResult("pack-1", "delivered", ["tenant-1/packs/pack-1/delivered/asset.jpg"])
+
+    class Logger:
+        def warning(self, *_args):
+            pass
+
+    async def execute(_value):
+        return expected
+
+    async def execute_activity(*_args, **_kwargs):
+        raise RuntimeError("metrics unavailable")
+
+    monkeypatch.setattr(studio.workflow, "logger", Logger())
+    monkeypatch.setattr(studio.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(studio.workflow, "execute_activity", execute_activity)
+    instance = StudioWorkflow()
+    monkeypatch.setattr(instance, "_execute", execute)
+
+    assert await instance.run(value()) is expected
+
+
+async def test_failure_metric_error_does_not_mask_business_failure(monkeypatch):
+    class Logger:
+        def warning(self, *_args):
+            pass
+
+    async def execute(_value):
+        raise RuntimeError("business failure")
+
+    async def execute_activity(*_args, **_kwargs):
+        raise RuntimeError("metrics unavailable")
+
+    monkeypatch.setattr(studio.workflow, "logger", Logger())
+    monkeypatch.setattr(studio.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(studio.workflow, "execute_activity", execute_activity)
+    instance = StudioWorkflow()
+    monkeypatch.setattr(instance, "_execute", execute)
+
+    with pytest.raises(RuntimeError, match="business failure"):
+        await instance.run(value())
