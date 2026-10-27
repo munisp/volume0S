@@ -11,12 +11,18 @@ import (
 )
 
 type API struct {
-	store Store
-	auth  *Authenticator
+	store   Store
+	auth    *Authenticator
+	metrics *RequestMetrics
 }
 
 func (a *API) routes() http.Handler {
+	metrics := a.metrics
+	if metrics == nil {
+		metrics = NewRequestMetrics()
+	}
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -44,7 +50,7 @@ func (a *API) routes() http.Handler {
 	mux.Handle("PUT /v1/dispatch-results", a.auth.middleware(a.role("delivery", http.HandlerFunc(a.putDispatchResult))))
 	mux.Handle("PUT /v1/suppressions", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.setSuppression))))
 	mux.Handle("DELETE /v1/suppressions", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.setSuppression))))
-	return recoverPanic(logRequests(mux))
+	return metrics.instrument(recoverPanic(logRequests(mux)))
 }
 
 func (a *API) role(role string, next http.Handler) http.Handler {
