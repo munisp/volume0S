@@ -23,6 +23,8 @@ def test_cycle_metrics_are_absolute_and_retry_safe():
     labels = {"tenant_id": "tenant-a", "campaign_id": "campaign-a", "cycle_id": "cycle-1", "channel": "email"}
     assert sample("volumeos_campaign_cycle_dispatches", labels | {"result": "success"}) == 9
     assert sample("volumeos_campaign_cycle_dispatches", labels | {"result": "failure"}) == 1
+    cycle_labels = {"tenant_id": "tenant-a", "campaign_id": "campaign-a", "cycle_id": "cycle-1"}
+    assert sample("volumeos_campaign_cycle_completed_timestamp_seconds", cycle_labels) > 0
 
 
 @pytest.mark.parametrize("success,failure", [(-1, 2), (True, 2), (0, 0), (1.5, 2)])
