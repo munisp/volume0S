@@ -211,6 +211,15 @@
 .schema-mark { display: flex; align-items: center; justify-content: center; width: 72px; height: 72px; flex: 0 0 auto; color: var(--primary); border: 1px dashed var(--border); border-radius: 8px; }
 .asset-schema strong { font-size: 15px; }
 .asset-schema p { margin-top: 4px; color: var(--muted-foreground); font-size: 12px; }
+.feed-error { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 18px; padding: 12px 14px; background: color-mix(in oklch, var(--red-400) 7%, var(--surface)); border: 1px solid color-mix(in oklch, var(--red-400) 30%, var(--border)); border-radius: 8px; color: var(--red-400); font-size: 12px; }
+.review-panel > .feed-error { margin-top: 18px; }
+.feed-error svg { flex: 0 0 auto; margin-top: 2px; }
+.qa-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 24px; }
+.qa-asset { position: relative; display: block; min-width: 0; overflow: hidden; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; aspect-ratio: 1; }
+.qa-asset:hover { border-color: var(--primary); }
+.qa-asset img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.qa-asset > span { position: absolute; left: 8px; bottom: 8px; padding: 3px 6px; background: color-mix(in oklch, var(--ink-950) 88%, transparent); border: 1px solid var(--border); border-radius: 4px; color: var(--paper-50); font-size: 9px; font-weight: 650; letter-spacing: 0.08em; }
+.qa-refresh { margin-top: 14px; }
 .offer-list { border-top: 1px solid var(--border); }
 .offer-row { display: grid; grid-template-columns: minmax(180px, 1.2fr) auto minmax(145px, 0.8fr) minmax(180px, 1fr) auto; align-items: center; gap: 24px; padding: 28px 0; border-bottom: 1px solid var(--border); }
 .offer-identity { display: flex; align-items: flex-start; gap: 18px; }
@@ -361,6 +370,7 @@
   .approval-flow { align-items: flex-start; flex-direction: column; gap: 8px; }
   .approval-flow > svg { transform: rotate(90deg); margin-left: 4px; }
   .asset-schema { align-items: flex-start; padding: 16px; }
+  .qa-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .schema-mark { width: 52px; height: 52px; }
   .offer-row { grid-template-columns: 1fr; gap: 18px; padding: 26px 0; }
   .offer-identity { align-items: center; }
