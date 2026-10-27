@@ -313,7 +313,7 @@ def verify(args: argparse.Namespace) -> int:
     report = require_report(output / "images.json", "published", args.source_revision)
     entries = report.get("images")
     if not isinstance(entries, dict) or set(entries) != {image["name"] for image in IMAGES}:
-        raise RuntimeError("publication report does not contain exactly the M1 images")
+        raise RuntimeError(f"publication report does not contain exactly the {len(IMAGES)} M1 images")
     for image in IMAGES:
         entry = entries[image["name"]]
         ref = reference(image)
