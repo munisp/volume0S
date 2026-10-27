@@ -9,6 +9,7 @@ verify:
 
 test: verify
 	cd apps/core/svc-tenancy && go test ./...
+	cd apps/core/svc-provisioning && go test ./...
 	cd apps/workers/campaign-worker && $(PYTHON) -m pytest
 	cd apps/workers/studio-worker && $(PYTHON) -m pytest
 	cd libs-rust/tb-adapter && cargo test
@@ -42,8 +43,18 @@ configure-secrets:
 		--dry-run=client -o yaml | $(K) apply -f -
 
 configure-m1-secrets:
+	@test -n "$(DATABASE_URL)" || (echo "Set DATABASE_URL before configuring tenancy messaging secrets"; exit 1)
 	@test -n "$(LISTMONK_ADMIN_PASSWORD)" -a -n "$(POSTIZ_DATABASE_URL)" -a -n "$(POSTIZ_REDIS_URL)" -a -n "$(POSTIZ_JWT_SECRET)" || (echo "Set ListMonk/Postiz secret variables"; exit 1)
 	@test -n "$(VOLUMEOS_SERVICE_TOKEN)" -a -n "$(AWS_ACCESS_KEY_ID)" -a -n "$(AWS_SECRET_ACCESS_KEY)" || (echo "Set service-token and object-storage variables"; exit 1)
+	@test "$${#VOLUMEOS_SERVICE_TOKEN}" -ge 32 -a "$${#SUPPRESSION_HMAC_SECRET}" -ge 32 || (echo "Service and suppression secrets must contain at least 32 bytes"; exit 1)
+	@test -n "$(KEYCLOAK_ADMIN_CLIENT_ID)" -a "$${#KEYCLOAK_ADMIN_CLIENT_SECRET}" -ge 16 || (echo "Set Keycloak admin client credentials"; exit 1)
+	$(K) -n core create secret generic svc-tenancy --from-literal=database-url="$(DATABASE_URL)" \
+		--from-literal=service-token="$(VOLUMEOS_SERVICE_TOKEN)" --from-literal=suppression-hmac-secret="$(SUPPRESSION_HMAC_SECRET)" \
+		--dry-run=client -o yaml | $(K) apply -f -
+	$(K) -n core create secret generic svc-provisioning --from-literal=service-token="$(VOLUMEOS_SERVICE_TOKEN)" \
+		--from-literal=keycloak-admin-client-id="$(KEYCLOAK_ADMIN_CLIENT_ID)" \
+		--from-literal=keycloak-admin-client-secret="$(KEYCLOAK_ADMIN_CLIENT_SECRET)" \
+		--from-literal=dapr-api-token="$(DAPR_API_TOKEN)" --dry-run=client -o yaml | $(K) apply -f -
 	$(K) -n core create secret generic listmonk-admin --from-literal=admin-password="$(LISTMONK_ADMIN_PASSWORD)" \
 		--dry-run=client -o yaml | $(K) apply -f -
 	$(K) -n core create secret generic postiz --from-literal=DATABASE_URL="$(POSTIZ_DATABASE_URL)" \
