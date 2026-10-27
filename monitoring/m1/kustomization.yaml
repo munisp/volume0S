@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ops
+resources:
+  - prometheusrule.yaml
+  - servicemonitor.yaml
+configMapGenerator:
+  - name: volumeos-m1-grafana-dashboard
+    files:
+      - volumeos-m1-slo.json=grafana-dashboard.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: volumeos
+generatorOptions:
+  disableNameSuffixHash: true
