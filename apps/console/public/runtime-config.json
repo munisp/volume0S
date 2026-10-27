@@ -1,0 +1,9 @@
+{
+  "coreApiUrl": "",
+  "orchestratorApiUrl": "",
+  "oidc": {
+    "authority": "",
+    "clientId": "",
+    "scope": "openid profile email"
+  }
+}
