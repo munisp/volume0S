@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from typing import Any
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest, start_http_server
@@ -27,6 +28,11 @@ DISPATCH_DURATION = Histogram(
 CYCLE_DISPATCHES = Gauge(
     "volumeos_campaign_cycle_dispatches", "Reconciled final dispatch attempts per campaign cycle.",
     ["tenant_id", "campaign_id", "cycle_id", "channel", "result"], registry=REGISTRY,
+)
+CYCLE_COMPLETED = Gauge(
+    "volumeos_campaign_cycle_completed_timestamp_seconds",
+    "Unix timestamp of the latest reconciliation for a campaign cycle.",
+    ["tenant_id", "campaign_id", "cycle_id"], registry=REGISTRY,
 )
 
 
@@ -56,6 +62,9 @@ def record_cycle(tenant_id: str, campaign_id: str, cycle_id: str, channel: str, 
     labels = {"tenant_id": tenant_id, "campaign_id": campaign_id, "cycle_id": cycle_id, "channel": channel}
     CYCLE_DISPATCHES.labels(**labels, result="success").set(success)
     CYCLE_DISPATCHES.labels(**labels, result="failure").set(failure)
+    CYCLE_COMPLETED.labels(
+        tenant_id=tenant_id, campaign_id=campaign_id, cycle_id=cycle_id,
+    ).set(time.time())
 
 
 def render() -> bytes:
