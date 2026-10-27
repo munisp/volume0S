@@ -71,3 +71,38 @@ spec:
   loadbalancer: {type: roundrobin}
   nodes:
     - {host: svc-tenancy.core.svc.cluster.local, port: 80, weight: 100}
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: svc-orchestrator
+  namespace: core
+spec:
+  http:
+    - name: orchestrator
+      match:
+        hosts: [api.volumeos.example.com]
+        paths: [/v1/campaigns, /v1/campaigns/*, /v1/studio/packs, /v1/studio/packs/*]
+      upstreams:
+        - name: svc-orchestrator
+      plugins:
+        - name: cors
+          enable: true
+          config:
+            allow_origins: https://console.volumeos.example.com
+            allow_methods: GET,POST,OPTIONS
+            allow_headers: Authorization,Content-Type,Accept
+            expose_headers: Content-Length
+            max_age: 300
+            allow_credential: false
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixUpstream
+metadata:
+  name: svc-orchestrator
+  namespace: core
+spec:
+  scheme: http
+  loadbalancer: {type: roundrobin}
+  nodes:
+    - {host: svc-orchestrator.core.svc.cluster.local, port: 80, weight: 100}

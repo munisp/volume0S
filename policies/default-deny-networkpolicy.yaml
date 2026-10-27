@@ -52,3 +52,40 @@ spec:
           podSelector:
             matchLabels: {app.kubernetes.io/name: prometheus}
       ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-edge-core-ingress
+  namespace: core
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [svc-tenancy, svc-orchestrator]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: edge}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-orchestrator-dependencies
+  namespace: core
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: svc-orchestrator}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ops}
+      ports: [{protocol: TCP, port: 7233}]
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: data}
+      ports: [{protocol: TCP, port: 9000}]

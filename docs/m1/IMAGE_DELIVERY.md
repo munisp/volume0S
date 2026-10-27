@@ -1,6 +1,6 @@
 # M1 production image delivery
 
-This runbook builds and publishes the five M1 runtime images. It does not declare staging acceptance. Local source tags, compatibility-built images, and local image digests are not evidence of GHCR publication.
+This runbook builds and publishes the six M1 runtime images: `svc-tenancy:0.2.0`, `svc-provisioning:0.1.0`, `svc-orchestrator:0.3.0`, `campaign-worker:0.2.0`, `studio-worker:0.2.0`, and `synthetic-probe:0.1.0`. It does not declare staging acceptance. Local source tags, compatibility-built images, and local image digests are not evidence of GHCR publication.
 
 ## Prerequisites
 
@@ -35,7 +35,7 @@ python3 scripts/m1_image_delivery.py smoke \
   --output "$IMAGE_RUN_DIR"
 ```
 
-The build uses the unmodified Dockerfiles with no cache and pulls current reviewed base tags. Every image carries the reviewed commit as its `org.opencontainers.image.revision` OCI label. The smoke command runs as the image-declared nonroot user with a read-only root filesystem, dropped capabilities, no-new-privileges, and a PID limit. It checks Core health/metrics, campaign/Studio metrics imports and scrape endpoints, and fail-closed startup for provisioning and the synthetic probe.
+The build uses the unmodified Dockerfiles with no cache and pulls current reviewed base tags. Every image carries the reviewed commit as its `org.opencontainers.image.revision` OCI label. The smoke command runs as the image-declared nonroot user with a read-only root filesystem, dropped capabilities, no-new-privileges, and a PID limit. It checks Core health/metrics, the orchestrator ASGI health endpoint with synthetic startup-only configuration, campaign/Studio metrics imports and scrape endpoints, and fail-closed startup for provisioning and the synthetic probe. The orchestrator smoke check is not evidence of a working OIDC provider, Temporal connection, object store, or tenant workflow.
 
 The smoke scope is deliberately limited. It does not replace PostgreSQL/RLS, Temporal execution, real provider, OIDC, GPU/ComfyUI, or staging acceptance evidence.
 
@@ -59,6 +59,6 @@ python3 scripts/m1_image_delivery.py verify \
   --output "$IMAGE_RUN_DIR"
 ```
 
-`images.json` is the handoff containing the five immutable `sha256:` references. `verification.json` records the subsequent comparison. Keep both with the reviewed source revision. Tags remain mutable operational aliases; staging should deploy the verified digests through its authorized GitOps change process.
+`images.json` is the handoff containing the six immutable `sha256:` references. `verification.json` records the subsequent comparison. Keep both with the reviewed source revision. Tags remain mutable operational aliases; staging should deploy the verified digests through its authorized GitOps change process.
 
 Only after the images are deployed and their runtime identities are confirmed should the operator continue with `docs/m1/STAGING_ACCEPTANCE.md`.

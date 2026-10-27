@@ -10,8 +10,9 @@ Prerequisites:
 - Read-only kubectl access for preflight; separate authorized access for the drills.
 - Real provider sandboxes for email, SMS, WhatsApp, and social. Customer social OAuth must already be connected; VolumeOS must not invent or delete it.
 - The private `volumeos-tenant-secrets` Dapr component and tenant-scoped Postiz keys.
+- Private `core/svc-orchestrator` and `workers/studio-worker` Secrets with nonempty `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys for the tenant-prefixed object store. Supply values only through the approved secret pipeline; never record them in evidence.
 - A reviewed ComfyUI deployment, model licence, and GPU capacity.
-- Production-fidelity `0.2.0` Core/campaign/Studio and `0.1.0` synthetic-probe images, built and smoke-tested with `docs/m1/IMAGE_DELIVERY.md`, published to GHCR, and verified by immutable registry digest; plus the M1 monitoring resources. Do not deploy local compatibility artifacts or activate alerts against placeholder metrics.
+- All six production-fidelity M1 images, including `svc-orchestrator:0.3.0`, built and smoke-tested with `docs/m1/IMAGE_DELIVERY.md`, published to GHCR, and verified by immutable registry digest; plus the M1 monitoring resources. Do not deploy local compatibility artifacts or activate alerts against placeholder metrics.
 - A dedicated synthetic tenant and least-privilege OIDC client, the private `workers/synthetic-probe` ConfigMap and Secret, and a pre-approved provider-sandbox send endpoint returning a completed synthetic receipt. A health endpoint or generic campaign route is not a substitute; see `docs/m1/OBSERVABILITY.md`.
 
 Copy `provider-config.example.json` to a private operator location and replace every placeholder. The file identifies configuration only; it must not contain API keys, tokens, passwords, recipient addresses, or connection URLs with credentials.
@@ -28,7 +29,7 @@ python3 scripts/staging_acceptance.py preflight \
   --output "$RUN_DIR"
 ```
 
-Preflight is read-only. It checks provider declarations, cluster access, required deployments (including Studio and the synthetic probe), secret names/keys in their actual namespaces, the Dapr tenant store, GPU capacity, and Core/worker/probe scrape resources. It does not output secret values. A nonzero exit means acceptance is blocked; fix the actual prerequisite rather than editing the JSON result.
+Preflight is read-only. It checks provider declarations, cluster access, required deployments (including the orchestrator, Studio, and synthetic probe), secret names/keys in their actual namespaces, the Dapr tenant store, GPU capacity, and Core/worker/probe scrape resources. It does not output secret values. A nonzero exit means acceptance is blocked; fix the actual prerequisite rather than editing the JSON result.
 
 ## 2. Execute and preserve evidence
 

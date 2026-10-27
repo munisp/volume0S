@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - ../../../apps/core/svc-tenancy/k8s
   - ../../../apps/core/svc-provisioning/k8s
+  - ../../../apps/core/svc-orchestrator/k8s
   - ../../../apps/workers/campaign-worker/k8s
   - ../../../apps/workers/studio-worker/k8s
   - ../../../apps/workers/synthetic-probe/k8s
