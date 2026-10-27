@@ -1,0 +1,80 @@
+# Private stage/dev configuration must supply the synthetic-probe ConfigMap and Secret.
+# The dedicated sandbox send endpoint is intentionally not implemented by this probe.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: synthetic-probe
+  namespace: workers
+  labels: {app.kubernetes.io/name: synthetic-probe, app.kubernetes.io/part-of: volumeos}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-probe
+  namespace: workers
+  labels: {app.kubernetes.io/name: synthetic-probe, app.kubernetes.io/part-of: volumeos}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: synthetic-probe}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: synthetic-probe, app.kubernetes.io/part-of: volumeos}
+    spec:
+      serviceAccountName: synthetic-probe
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: probe
+          image: ghcr.io/munisp/synthetic-probe:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 9092, name: metrics}]
+          env:
+            - {name: METRICS_PORT, value: "9092"}
+            - {name: SYNTHETIC_ENVIRONMENT, valueFrom: {fieldRef: {fieldPath: "metadata.labels['volumeos.io/env']"}}}
+            - name: SYNTHETIC_TENANT_ID
+              valueFrom: {configMapKeyRef: {name: synthetic-probe, key: tenant-id}}
+            - name: OIDC_TOKEN_URL
+              valueFrom: {configMapKeyRef: {name: synthetic-probe, key: oidc-token-url}}
+            - name: CORE_API_URL
+              valueFrom: {configMapKeyRef: {name: synthetic-probe, key: core-api-url}}
+            - name: SYNTHETIC_SEND_URL
+              valueFrom: {configMapKeyRef: {name: synthetic-probe, key: send-url}}
+            - name: OIDC_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: synthetic-probe, key: client-id}}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: synthetic-probe, key: client-secret}}
+            - name: VOLUMEOS_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: synthetic-probe, key: service-token}}
+          resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: 250m, memory: 256Mi}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synthetic-probe-metrics
+  namespace: workers
+  labels: {app.kubernetes.io/name: synthetic-probe, app.kubernetes.io/part-of: volumeos}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: synthetic-probe}
+  ports: [{name: metrics, port: 9092, targetPort: metrics}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: synthetic-probe-ingress
+  namespace: workers
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: synthetic-probe}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ops}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: prometheus}
+      ports: [{protocol: TCP, port: 9092}]
