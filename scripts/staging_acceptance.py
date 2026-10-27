@@ -184,7 +184,7 @@ def preflight(args: argparse.Namespace) -> int:
                               "Expected context reached the core namespace" if code == 0 else f"Cluster access failed: {payload}"))
         expected = {
             "core": {"svc-tenancy", "svc-provisioning", "listmonk", "postiz"},
-            "workers": {"campaign-worker"},
+            "workers": {"campaign-worker", "studio-worker", "synthetic-probe"},
             "ai": {str((config or {}).get("comfyui", {}).get("deployment", "comfyui"))},
         }
         missing: list[str] = []
@@ -215,18 +215,19 @@ def preflight(args: argparse.Namespace) -> int:
         results.append(result("PF-WORKLOADS", status, detail))
 
         required_secrets = {
-            "svc-tenancy": {"database-url", "service-token", "suppression-hmac-secret"},
-            "svc-provisioning": {"service-token", "keycloak-admin-client-id", "keycloak-admin-client-secret"},
-            "listmonk-admin": {"admin-password"},
-            "postiz": {"DATABASE_URL", "REDIS_URL", "JWT_SECRET"},
+            ("core", "svc-tenancy"): {"database-url", "service-token", "suppression-hmac-secret"},
+            ("core", "svc-provisioning"): {"service-token", "keycloak-admin-client-id", "keycloak-admin-client-secret"},
+            ("core", "listmonk-admin"): {"admin-password"},
+            ("core", "postiz"): {"DATABASE_URL", "REDIS_URL", "JWT_SECRET"},
+            ("workers", "synthetic-probe"): {"client-id", "client-secret", "service-token"},
         }
         secret_errors: list[str] = []
-        for name, keys in required_secrets.items():
-            code, payload = cluster.get(["-n", "core", "get", "secret", name])
+        for (namespace, name), keys in required_secrets.items():
+            code, payload = cluster.get(["-n", namespace, "get", "secret", name])
             if code:
-                secret_errors.append(f"core/{name} unavailable")
+                secret_errors.append(f"{namespace}/{name} unavailable")
             elif not isinstance(payload, dict) or any(not payload.get("data", {}).get(key) for key in keys):
-                secret_errors.append(f"core/{name} lacks required nonempty keys")
+                secret_errors.append(f"{namespace}/{name} lacks required nonempty keys")
         results.append(result("PF-SECRETS", "failed" if secret_errors else "passed",
                               "; ".join(secret_errors) or "Required secret names and keys exist; values were not recorded"))
 
@@ -249,12 +250,20 @@ def preflight(args: argparse.Namespace) -> int:
                               f"GPU capacity on {', '.join(gpu_nodes)}" if gpu_nodes else "No node reports nvidia.com/gpu capacity"))
 
         observation_errors: list[str] = []
-        for kind, name in (("prometheusrule", "volumeos-m1-slo"), ("configmap", "volumeos-m1-grafana-dashboard")):
+        required_observation = (
+            ("prometheusrule", "volumeos-m1-slo"),
+            ("configmap", "volumeos-m1-grafana-dashboard"),
+            ("servicemonitor", "svc-tenancy"),
+            ("servicemonitor", "campaign-worker"),
+            ("servicemonitor", "studio-worker"),
+            ("servicemonitor", "synthetic-probe"),
+        )
+        for kind, name in required_observation:
             code, payload = cluster.get(["-n", "ops", "get", kind, name])
             if code:
                 observation_errors.append(f"ops/{name} unavailable")
         results.append(result("PF-OBSERVABILITY", "failed" if observation_errors else "passed",
-                              "; ".join(observation_errors) or "M1 PrometheusRule and Grafana dashboard ConfigMap exist"))
+                              "; ".join(observation_errors) or "M1 rules, dashboard, and service/probe scrape resources exist"))
     overall = "passed" if all(item["status"] == "passed" for item in results) else "blocked"
     report = {
         "schema_version": 1,
