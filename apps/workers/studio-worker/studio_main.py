@@ -271,11 +271,19 @@ class StudioWorkflow:
         try:
             result = await self._execute(value)
         except BaseException:
-            await workflow.execute_activity(
-                record_studio_outcome, args=[StudioResult(value.pack_id, "failed", []), started_at], **options
-            )
+            try:
+                await workflow.execute_activity(
+                    record_studio_outcome, args=[StudioResult(value.pack_id, "failed", []), started_at], **options
+                )
+            except Exception as metric_error:
+                workflow.logger.warning("Studio failure metric recording failed: %s", metric_error)
             raise
-        await workflow.execute_activity(record_studio_outcome, args=[result, started_at], **options)
+        try:
+            await workflow.execute_activity(record_studio_outcome, args=[result, started_at], **options)
+        except Exception as metric_error:
+            # Observability must not turn a delivered/rejected pack into a
+            # failed workflow or trigger another business-side execution.
+            workflow.logger.warning("Studio outcome metric recording failed: %s", metric_error)
         return result
 
     async def _execute(self, value: StudioInput) -> StudioResult:
