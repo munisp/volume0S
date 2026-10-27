@@ -11,7 +11,7 @@ Prerequisites:
 - Real provider sandboxes for email, SMS, WhatsApp, and social. Customer social OAuth must already be connected; VolumeOS must not invent or delete it.
 - The private `volumeos-tenant-secrets` Dapr component and tenant-scoped Postiz keys.
 - A reviewed ComfyUI deployment, model licence, and GPU capacity.
-- Built and published `0.2.0` Core/campaign/Studio and `0.1.0` synthetic-probe images, plus the M1 monitoring resources. Do not activate alerts against placeholder metrics.
+- Production-fidelity `0.2.0` Core/campaign/Studio and `0.1.0` synthetic-probe images, built and smoke-tested with `docs/m1/IMAGE_DELIVERY.md`, published to GHCR, and verified by immutable registry digest; plus the M1 monitoring resources. Do not deploy local compatibility artifacts or activate alerts against placeholder metrics.
 - A dedicated synthetic tenant and least-privilege OIDC client, the private `workers/synthetic-probe` ConfigMap and Secret, and a pre-approved provider-sandbox send endpoint returning a completed synthetic receipt. A health endpoint or generic campaign route is not a substitute; see `docs/m1/OBSERVABILITY.md`.
 
 Copy `provider-config.example.json` to a private operator location and replace every placeholder. The file identifies configuration only; it must not contain API keys, tokens, passwords, recipient addresses, or connection URLs with credentials.
