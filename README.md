@@ -11,8 +11,9 @@ This repository currently implements the **M0 foundation plus an M1 offer, messa
 - **Persistence:** PostgreSQL migrations executed under an advisory lock, per-tenant transactions, no derived financial balances in PostgreSQL.
 - **Campaign orchestration (Python/Temporal):** draft → explicit human approval signal → reserve → dispatch → post, with a 24-hour approval timeout and void-on-failure compensation. Activities use real HTTP endpoints, idempotency keys, tenant scope, retries, and heartbeats; there are no simulated provider successes.
 - **M1 offer catalog (Go):** versioned NGN minor-unit prices and entitlements for Come-Back Engine, Content Cadence, Shopfront Studio, and the launch bundle. Supplied Q1 founding rates remain operator-review-required rather than being represented as currently active prices.
-- **Guarded messaging adapters:** ListMonk and Postiz clients with tenant bindings, approval validation, fail-closed suppression/kill-switch policy, persistent-store idempotency boundary, and usage-event emission.
-- **Onboarding saga:** identity → tenancy → ListMonk/Postiz initialization → activation → welcome, with reverse compensation. TigerBeetle account creation remains M2.
+- **Guarded messaging adapters:** ListMonk and Postiz clients with tenant bindings, approval validation, persistent PostgreSQL suppression/kill-switch policy and idempotency results, tenant-scoped Dapr Postiz credentials, and usage-event emission. Suppression records contain HMAC recipient digests rather than recipient addresses.
+- **Internal provisioning:** scoped service authentication, idempotent Keycloak tenant clients with hardcoded tenant claims, and read-only validation of existing enabled Postiz OAuth integrations. Customer social connections are never fabricated or deleted by compensation.
+- **Onboarding saga:** Keycloak → tenancy → ListMonk/Postiz validation → activation → welcome, with reverse compensation for resources VolumeOS owns. TigerBeetle account creation remains M2.
 - **Shopfront Studio:** versioned ComfyUI image graph, GPU job submission/polling, tenant-prefixed object storage, human QA approval/rejection, and WhatsApp/Jumia delivery formats. Rejected or timed-out packs are never delivered.
 - **Money contract (Rust):** deterministic two-phase reserve/post/void state machine with replay and idempotency-conflict tests. The live TigerBeetle transport is an M2 deliverable.
 - **Event contracts:** Protobuf envelopes and usage, money, lead, message-status, and audit-publish records; `money.events` is explicitly a mirror, not a ledger.
@@ -21,12 +22,13 @@ This repository currently implements the **M0 foundation plus an M1 offer, messa
 
 ## Intentionally not represented as complete
 
-ListMonk and Postiz are configured but still require staging health, tenant provisioning, provider, backup, and isolation acceptance. Wazuh is not active: the upstream base contains bootstrap credentials and certificate inputs that must be replaced through a reviewed private overlay. The ComfyUI GPU runtime and model licenses are operator-supplied acceptance items. The APISIX-to-Keycloak OIDC plugin secret, internal identity/Postiz provisioners, TigerBeetle transport, Flink/Spark/Sedona/Ray workloads, DataFusion service, and console remain milestone work. The Rust reservation book is a contract model, not a running TigerBeetle adapter.
+ListMonk and Postiz are configured but still require staging health, tenant provisioning, provider, backup, and isolation acceptance. The private `volumeos-tenant-secrets` Dapr component and per-tenant Postiz keys remain operator-supplied. Wazuh is not active: the upstream base contains bootstrap credentials and certificate inputs that must be replaced through a reviewed private overlay. The ComfyUI GPU runtime and model licenses are operator-supplied acceptance items. The APISIX-to-Keycloak OIDC plugin secret, TigerBeetle transport, Flink/Spark/Sedona/Ray workloads, DataFusion service, and console remain milestone work. The Rust reservation book is a contract model, not a running TigerBeetle adapter.
 
 ## Repository layout
 
 ```text
-apps/core/svc-tenancy/          Go API, OIDC, PostgreSQL, migrations, tests
+apps/core/svc-tenancy/          Go API, OIDC, PostgreSQL, messaging policy, tests
+apps/core/svc-provisioning/     Keycloak and Postiz onboarding boundary, tests
 apps/workers/campaign-worker/   Campaign/onboarding workflows, messaging adapters, tests
 apps/workers/studio-worker/     ComfyUI workflow, QA gate, asset delivery, tests
 bootstrap/m1/postiz/           Reviewed upstream-image packaging with existing secrets
@@ -49,6 +51,9 @@ python3 -m pip install pyyaml
 python3 scripts/verify_repo.py
 
 cd apps/core/svc-tenancy
+go test ./...
+
+cd ../svc-provisioning
 go test ./...
 
 cd ../../workers/campaign-worker
@@ -89,7 +94,10 @@ export MINIO_ROOT_USER='…'
 export MINIO_ROOT_PASSWORD='…'
 export GRAFANA_ADMIN_PASSWORD='…'
 make configure-secrets
-# For the M1 slice, also supply the documented ListMonk/Postiz/service/S3 variables.
+# For M1, also supply ListMonk/Postiz/S3 variables plus strong random values for:
+# VOLUMEOS_SERVICE_TOKEN, SUPPRESSION_HMAC_SECRET, KEYCLOAK_ADMIN_CLIENT_ID,
+# KEYCLOAK_ADMIN_CLIENT_SECRET, and optionally DAPR_API_TOKEN.
+# Install each postiz-{tenant_id}-api-key in the private volumeos-tenant-secrets Dapr store.
 # make configure-m1-secrets
 make apply-apps
 
@@ -110,8 +118,8 @@ Sync waves order resources during an Argo sync operation; they are **not** a sub
 
 ### M1 acceptance still requiring real providers and a cluster
 
-- Complete the internal identity and Postiz provisioner endpoints used by onboarding; no fake success responses are included.
-- Verify per-tenant ListMonk lists/Postiz channels, double opt-in and suppression, provider webhooks, and zero sends while suspended.
+- Accept the real Keycloak and Postiz provisioner against staging providers; no fake success responses are included.
+- Verify per-tenant ListMonk lists and Dapr Postiz credentials, customer OAuth integration validation, double opt-in and persistent suppression, provider webhooks, and zero sends while suspended.
 - Run the onboarding failure-injection drill and confirm every compensating action and optimistic tenancy transition.
 - Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48-hour turnaround.
 - Replace Wazuh bootstrap credentials/certificates before activation, then run the purple-team detection drill.
