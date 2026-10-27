@@ -11,13 +11,14 @@ dependencies = [
   "httpx>=0.28,<1",
   "boto3>=1.35,<2",
   "Pillow>=11,<13",
+  "prometheus-client>=0.21,<1",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9", "pytest-asyncio>=0.25,<1"]
 
 [tool.setuptools]
-py-modules = ["studio_main", "studio"]
+py-modules = ["studio_main", "studio", "metrics"]
 
 [tool.setuptools.data-files]
 "workflows" = ["workflows/*.json"]
