@@ -1,0 +1,132 @@
+{
+  "uid": "volumeos-m1-slo",
+  "title": "VolumeOS M1 SLO and Delivery",
+  "description": "NFR-2, BR-18, OBS-2 and OBS-6. Requires the metric contract in docs/m1/OBSERVABILITY.md; no data is not passing evidence.",
+  "tags": ["volumeos", "m1", "slo"],
+  "timezone": "Africa/Lagos",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {"from": "now-30d", "to": "now"},
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Acceptance boundary",
+      "gridPos": {"h": 3, "w": 24, "x": 0, "y": 0},
+      "options": {
+        "mode": "markdown",
+        "content": "Targets: **Core API 99.5% per calendar month**, **dispatch 99% per campaign cycle**, and **login/send probes every 5 minutes**. Missing or uninstrumented series mean unknown, not passed. Pay probes enter in M2."
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Core API availability — rolling 30d (target 99.5%)",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 3},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "1 - (sum(increase(volumeos_http_requests_total{service=\"svc-tenancy\",code=~\"5..\"}[30d])) / clamp_min(sum(increase(volumeos_http_requests_total{service=\"svc-tenancy\"}[30d])), 0.000000001))"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.995}]}}}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Core API availability — selected range",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 3},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "1 - (sum(increase(volumeos_http_requests_total{service=\"svc-tenancy\",code=~\"5..\"}[${__range}])) / clamp_min(sum(increase(volumeos_http_requests_total{service=\"svc-tenancy\"}[${__range}])), 0.000000001))"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.995}]}}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Core API error ratio — 5m",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 3},
+      "targets": [{"refId": "A", "expr": "1 - volumeos:core_api_availability:ratio_rate5m"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Dispatch success per campaign cycle (target 99%)",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "targets": [{"refId": "A", "expr": "volumeos:campaign_dispatch_success_ratio:cycle", "legendFormat": "{{tenant_id}}/{{campaign_id}}/{{cycle_id}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.99}]}}}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Final dispatches by channel and result",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+      "targets": [{"refId": "A", "expr": "sum by (channel, result) (volumeos_campaign_cycle_dispatches)", "legendFormat": "{{channel}}/{{result}}"}]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Five-minute synthetic journey success",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 18},
+      "targets": [{"refId": "A", "expr": "probe_success{journey=~\"login|send\"}", "legendFormat": "{{journey}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Campaign approval decisions",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 18},
+      "targets": [{"refId": "A", "expr": "sum by (result) (increase(volumeos_campaign_approvals_total[${__range}]))", "legendFormat": "{{result}}"}]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Dispatch latency p95",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 18},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le, channel) (rate(volumeos_campaign_dispatch_duration_seconds_bucket[5m])))", "legendFormat": "{{channel}}"}],
+      "fieldConfig": {"defaults": {"unit": "s", "min": 0}}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Studio pack outcomes",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
+      "targets": [{"refId": "A", "expr": "sum by (result) (increase(volumeos_studio_packs_total[${__range}]))", "legendFormat": "{{result}}"}]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Studio end-to-end duration p95 (48h turnaround review)",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le, result) (rate(volumeos_studio_pack_duration_seconds_bucket[5m])))", "legendFormat": "{{result}}"}],
+      "fieldConfig": {"defaults": {"unit": "s", "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 172800}]}}}
+    }
+  ]
+}
