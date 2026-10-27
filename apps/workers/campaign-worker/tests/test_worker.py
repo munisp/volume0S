@@ -15,8 +15,8 @@ def test_redacts_nigerian_phone_and_email_before_ai():
 
 def test_rejects_unfunded_campaign():
     with pytest.raises(ApplicationError):
-        validate_campaign(CampaignInput("tenant-a", "campaign-a", "Launch", 0))
+        validate_campaign(CampaignInput("tenant-a", "campaign-a", "Launch", 0, cycle_id="cycle-1"))
 
 
 def test_accepts_valid_campaign():
-    validate_campaign(CampaignInput("tenant-a", "campaign-a", "Launch", 55_000_00))
+    validate_campaign(CampaignInput("tenant-a", "campaign-a", "Launch", 55_000_00, cycle_id="cycle-1"))
