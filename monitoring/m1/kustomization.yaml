@@ -4,6 +4,7 @@ namespace: ops
 resources:
   - prometheusrule.yaml
   - servicemonitor.yaml
+  - worker-servicemonitors.yaml
 configMapGenerator:
   - name: volumeos-m1-grafana-dashboard
     files:
