@@ -23,7 +23,7 @@ apply-namespaces: verify
 
 bootstrap-argocd:
 	helm repo add argo https://argoproj.github.io/argo-helm --force-update
-	helm repo update
+	helm repo update argo
 	helm upgrade --install argocd argo/argo-cd --version $(ARGOCD_CHART_VERSION) \
 		-n argocd --create-namespace --wait --timeout 10m
 	@echo "Initial admin password (rotate immediately):"
@@ -37,13 +37,13 @@ configure-secrets:
 	@test -n "$(DATABASE_URL)" || (echo "Set DATABASE_URL"; exit 1)
 	$(K) -n core create secret generic svc-tenancy --from-literal=database-url="$(DATABASE_URL)" \
 		--dry-run=client -o yaml | $(K) apply -f -
-	@test -n "$(MINIO_ROOT_USER)" -a -n "$(MINIO_ROOT_PASSWORD)" || (echo "Set MinIO credentials"; exit 1)
-	$(K) -n data create secret generic minio-root --from-literal=rootUser="$(MINIO_ROOT_USER)" \
-		--from-literal=rootPassword="$(MINIO_ROOT_PASSWORD)" \
+	@test -n "$(MINIO_ROOT_USER)" -a -n "$(MINIO_ROOT_PASSWORD)" || (echo "Set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD"; exit 1)
+	$(K) -n data create secret generic minio-root \
+		--from-literal=rootUser="$(MINIO_ROOT_USER)" --from-literal=rootPassword="$(MINIO_ROOT_PASSWORD)" \
 		--dry-run=client -o yaml | $(K) apply -f -
 	@test -n "$(GRAFANA_ADMIN_PASSWORD)" || (echo "Set GRAFANA_ADMIN_PASSWORD"; exit 1)
-	$(K) -n ops create secret generic grafana-admin --from-literal=admin-user=admin \
-		--from-literal=admin-password="$(GRAFANA_ADMIN_PASSWORD)" \
+	$(K) -n ops create secret generic grafana-admin \
+		--from-literal=admin-user=admin --from-literal=admin-password="$(GRAFANA_ADMIN_PASSWORD)" \
 		--dry-run=client -o yaml | $(K) apply -f -
 
 configure-m1-secrets:
