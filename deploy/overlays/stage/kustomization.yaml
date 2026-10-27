@@ -5,6 +5,7 @@ resources:
   - ../../../apps/core/svc-provisioning/k8s
   - ../../../apps/workers/campaign-worker/k8s
   - ../../../apps/workers/studio-worker/k8s
+  - ../../../apps/workers/synthetic-probe/k8s
   - ../../../policies
 labels:
   - includeSelectors: true
@@ -15,3 +16,9 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 2
+  # One scheduler avoids duplicate synthetic provider sends in staging.
+  - target: {kind: Deployment, name: synthetic-probe}
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
