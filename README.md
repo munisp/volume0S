@@ -42,8 +42,9 @@ deploy/overlays/                dev / stage / prod Kustomize overlays
 policies/                       Default-deny network policy baseline
 scripts/verify_repo.py          Cluster-independent repository gate
 scripts/staging_acceptance.py   Fail-closed staging preflight and evidence verifier
+scripts/m1_image_delivery.py    Clean-revision build, nonroot smoke, GHCR digest handoff
 monitoring/m1/                  M1 metric-dependent alerts, scrape config, dashboard
-docs/                           Requirements, ADRs, observability contract, acceptance runbook
+docs/                           Requirements, ADRs, observability, image and acceptance runbooks
 ```
 
 ## Local verification
@@ -134,6 +135,6 @@ Sync waves order resources during an Argo sync operation; they are **not** a sub
 - Replace Wazuh bootstrap credentials/certificates before activation, then run the purple-team detection drill.
 - Build and publish the changed service/worker/probe images, configure the dedicated synthetic sandbox send endpoint and credentials, verify five-minute login/send evidence and alert delivery, reconcile provider cost with `usage.events`, and publish M1 SLO dashboards.
 
-Use [`docs/m1/STAGING_ACCEPTANCE.md`](docs/m1/STAGING_ACCEPTANCE.md) to run the preflight and capture real evidence. The current repository supplies instrumentation, the acceptance process, and monitoring definitions; it does not contain a passing staging evidence bundle. See [`docs/m1/OBSERVABILITY.md`](docs/m1/OBSERVABILITY.md) before applying `monitoring/m1/`.
+Use [`docs/m1/IMAGE_DELIVERY.md`](docs/m1/IMAGE_DELIVERY.md) for production-fidelity builds, nonroot smoke checks, GHCR publication, and immutable digest verification. Then use [`docs/m1/STAGING_ACCEPTANCE.md`](docs/m1/STAGING_ACCEPTANCE.md) to run the preflight and capture real evidence. The current repository supplies instrumentation, the acceptance process, and monitoring definitions; it does not contain a passing staging evidence bundle. See [`docs/m1/OBSERVABILITY.md`](docs/m1/OBSERVABILITY.md) before applying `monitoring/m1/`.
 
 See [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) and [`docs/m1/REQUIREMENTS.md`](docs/m1/REQUIREMENTS.md) for requirement-level status.
