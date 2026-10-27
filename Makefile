@@ -3,11 +3,14 @@ K ?= kubectl
 ARGOCD_CHART_VERSION := 10.11.6
 PYTHON ?= python3
 
-.PHONY: verify test apply-namespaces bootstrap-argocd apply-apps configure-secrets configure-m1-secrets
+.PHONY: verify test test-staging-acceptance apply-namespaces bootstrap-argocd apply-apps configure-secrets configure-m1-secrets
 verify:
 	$(PYTHON) scripts/verify_repo.py
 
-test: verify
+test-staging-acceptance:
+	$(PYTHON) -m unittest discover -s scripts/tests -v
+
+test: verify test-staging-acceptance
 	cd apps/core/svc-tenancy && go test ./...
 	cd apps/core/svc-provisioning && go test ./...
 	cd apps/workers/campaign-worker && $(PYTHON) -m pytest
