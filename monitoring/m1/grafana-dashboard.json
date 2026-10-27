@@ -83,7 +83,7 @@
       "title": "Final dispatches by channel and result",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
-      "targets": [{"refId": "A", "expr": "sum by (channel, result) (volumeos_campaign_cycle_dispatches)", "legendFormat": "{{channel}}/{{result}}"}]
+      "targets": [{"refId": "A", "expr": "sum by (channel, result) (max by (tenant_id, campaign_id, cycle_id, channel, result) (volumeos_campaign_cycle_dispatches))", "legendFormat": "{{channel}}/{{result}}"}]
     },
     {
       "id": 7,
