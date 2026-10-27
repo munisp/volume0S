@@ -60,9 +60,23 @@ if studio_graph.exists():
 for env in ("dev", "stage", "prod"):
     path = ROOT / f"deploy/overlays/{env}/kustomization.yaml"
     doc = yaml.safe_load(path.read_text())
-    for resource in doc.get("resources", []):
+    resources = doc.get("resources", [])
+    for resource in resources:
         if not (path.parent / resource).exists():
             errors.append(f"{path.relative_to(ROOT)}: missing resource {resource}")
+    if "../../../apps/core/svc-provisioning/k8s" not in resources:
+        errors.append(f"{path.relative_to(ROOT)}: svc-provisioning is not deployed")
+
+messaging_migration = ROOT / "apps/core/svc-tenancy/migrations/002_messaging.sql"
+migration_text = messaging_migration.read_text()
+for required in ("CREATE TABLE IF NOT EXISTS suppressions", "CREATE TABLE IF NOT EXISTS dispatch_results", "ENABLE ROW LEVEL SECURITY"):
+    if required not in migration_text:
+        errors.append(f"messaging migration is missing {required}")
+onboarding_text = (ROOT / "apps/workers/campaign-worker/onboarding.py").read_text()
+if '"undo:postiz"' in onboarding_text:
+    errors.append("customer-owned Postiz integrations must not be compensated")
+if "postiz_integration_id" not in onboarding_text:
+    errors.append("onboarding must validate an explicit Postiz integration")
 
 required_topics = {"usage.events", "message.status", "census.pings", "lead.events", "money.events", "ai.jobs", "audit.publish"}
 text = (ROOT / "bootstrap/platform/kafka-topics.yaml").read_text()
