@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type InputHTMLAttributes, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type InputHTMLAttributes, type ReactNode } from 'react'
 import type { User } from 'oidc-client-ts'
 import {
   Activity, ArrowRight, BadgeCheck, Ban, Check, CheckCircle2, ChevronRight,
@@ -11,7 +11,7 @@ import { VolumeOSApi, ApiError } from './lib/api'
 import { VolumeOSAuth } from './lib/auth'
 import { defaultConfig, loadRuntimeConfig, oidcConfigured, type RuntimeConfig } from './lib/config'
 import { previewBundles, previewCampaigns, previewOffers, previewPacks, previewTenant } from './lib/demo'
-import type { Bundle, Campaign, Offer, PageId, StudioPack, Tenant } from './lib/types'
+import type { Bundle, Campaign, Offer, PageId, StudioAsset, StudioPack, Tenant } from './lib/types'
 import { usePwa } from './hooks/usePwa'
 
 const navigation: { id: PageId; label: string; icon: LucideIcon }[] = [
@@ -33,6 +33,12 @@ function titleCase(value: string) {
   return value.replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase())
 }
 
+function formatWorkflowTime(value: string) {
+  const timestamp = new Date(value)
+  if (Number.isNaN(timestamp.getTime())) return 'Time unavailable'
+  return new Intl.DateTimeFormat('en-NG', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
+}
+
 function App() {
   const [config, setConfig] = useState<RuntimeConfig>(defaultConfig)
   const [auth, setAuth] = useState<VolumeOSAuth | null>(null)
@@ -51,6 +57,16 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [ready, setReady] = useState(false)
   const [toast, setToast] = useState<Toast | null>(null)
+  const [feedsLoading, setFeedsLoading] = useState(false)
+  const [feedsError, setFeedsError] = useState<string | null>(null)
+  const [qaAssets, setQaAssets] = useState<StudioAsset[]>([])
+  const [qaPackId, setQaPackId] = useState('')
+  const [qaManifest, setQaManifest] = useState('')
+  const [qaLoading, setQaLoading] = useState(false)
+  const [qaError, setQaError] = useState<string | null>(null)
+  const [qaImageError, setQaImageError] = useState<string | null>(null)
+  const [loadedQaAssets, setLoadedQaAssets] = useState<Record<string, boolean>>({})
+  const [qaReloadToken, setQaReloadToken] = useState(0)
   const pwa = usePwa()
 
   const api = useMemo(() => new VolumeOSApi(
@@ -62,8 +78,56 @@ function App() {
   const tenant = liveTenant ?? (!user ? previewTenant : null)
   const authenticated = Boolean(user && config.coreApiUrl)
   const tenantConnected = Boolean(authenticated && liveTenant)
+  const workflowFeedReady = tenantConnected && api.orchestratorConfigured && !feedsError
   const awaitingApprovals = campaigns.filter(item => item.status === 'awaiting_approval').length
     + packs.filter(item => item.status === 'awaiting_qa').length
+  const currentPack = packs.find(item => item.id === selectedPack) ?? packs[0]
+  const qaTargetId = currentPack?.id ?? ''
+  const qaTargetManifest = currentPack?.manifestSha256 ?? ''
+  const qaTargetAssetCount = currentPack?.assets ?? 0
+  const qaManifestReady = Boolean(authenticated && currentPack && qaPackId === currentPack.id && qaManifest
+    && qaManifest === currentPack.manifestSha256 && qaAssets.length === currentPack.assets && qaAssets.length > 0 && !qaError)
+  const qaReviewReady = Boolean(qaManifestReady && !qaImageError && qaAssets.every(asset => loadedQaAssets[asset.id]))
+
+  const refreshWorkflows = useCallback(async () => {
+    if (!user || !liveTenant || !api.orchestratorConfigured) return
+    setFeedsLoading(true)
+    try {
+      const [campaignFeed, studioFeed] = await Promise.all([api.campaigns(), api.studioPacks()])
+      const nextCampaigns: Campaign[] = campaignFeed.campaigns.map(snapshot => ({
+        id: snapshot.campaign_id, name: snapshot.campaign_id, client: liveTenant.name,
+        cycle: snapshot.cycle_id, status: snapshot.status, channels: snapshot.channels,
+        budgetMinor: snapshot.amount_minor, currency: snapshot.currency,
+        updated: formatWorkflowTime(snapshot.updated_at),
+      }))
+      const nextPacks: StudioPack[] = studioFeed.packs.map(snapshot => ({
+        id: snapshot.pack_id, product: snapshot.product_id, client: liveTenant.name,
+        tier: snapshot.tier, status: snapshot.status, assets: snapshot.assets,
+        manifestSha256: snapshot.manifest_sha256, updated: formatWorkflowTime(snapshot.updated_at),
+      }))
+      setCampaigns(nextCampaigns)
+      setPacks(nextPacks)
+      setSelectedCampaign(current => nextCampaigns.some(item => item.id === current) ? current : nextCampaigns[0]?.id ?? '')
+      setSelectedPack(current => nextPacks.some(item => item.id === current) ? current : nextPacks[0]?.id ?? '')
+      setFeedsError(null)
+    } catch (error) {
+      setFeedsError(errorMessage(error))
+    } finally {
+      setFeedsLoading(false)
+    }
+  }, [api, liveTenant, user])
+
+  useEffect(() => {
+    if (!tenantConnected || !api.orchestratorConfigured) return
+    const initial = window.setTimeout(() => void refreshWorkflows(), 0)
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && pwa.online) void refreshWorkflows()
+    }, 30_000)
+    return () => {
+      window.clearTimeout(initial)
+      window.clearInterval(timer)
+    }
+  }, [tenantConnected, api.orchestratorConfigured, refreshWorkflows, pwa.online])
 
   useEffect(() => {
     let active = true
@@ -120,6 +184,38 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
+  useEffect(() => {
+    let active = true
+    const resetAndLoad = window.setTimeout(() => {
+      if (!active) return
+      setQaAssets([])
+      setQaPackId('')
+      setQaManifest('')
+      setQaError(null)
+      setQaImageError(null)
+      setLoadedQaAssets({})
+      if (!tenantConnected || !api.orchestratorConfigured || !qaTargetId || !qaTargetManifest || qaTargetAssetCount <= 0) {
+        setQaLoading(false)
+        return
+      }
+      setQaLoading(true)
+      void api.studioAssets(qaTargetId).then(response => {
+        if (!active) return
+        setQaAssets(response.assets)
+        setQaPackId(response.pack_id)
+        setQaManifest(response.manifest_sha256)
+      }).catch(error => {
+        if (active) setQaError(errorMessage(error))
+      }).finally(() => {
+        if (active) setQaLoading(false)
+      })
+    }, 0)
+    return () => {
+      active = false
+      window.clearTimeout(resetAndLoad)
+    }
+  }, [tenantConnected, api, qaTargetId, qaTargetManifest, qaTargetAssetCount, qaReloadToken])
+
   function navigate(next: PageId) {
     setPage(next)
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -137,6 +233,9 @@ function App() {
     setPacks(previewPacks)
     setSelectedCampaign(previewCampaigns[0].id)
     setSelectedPack(previewPacks[0].id)
+    setFeedsError(null)
+    setQaAssets([])
+    setQaManifest('')
     setToast({ kind: 'info', message: 'Signed out. Tenant-scoped API access has been cleared from this tab.' })
   }
 
@@ -180,7 +279,7 @@ function App() {
         amount_minor: Math.round(Number(data.get('amount')) * 100),
         currency: 'NGN',
       })
-      setCampaigns(current => [{ id: campaignId, name: campaignId, client: tenant?.name ?? 'Tenant', cycle: String(data.get('cycle_id')), status: 'awaiting_approval', channels: ['Provider workflow'], budgetMinor: Math.round(Number(data.get('amount')) * 100), updated: 'Just now' }, ...current])
+      await refreshWorkflows()
       setSelectedCampaign(campaignId)
       setModal(null)
       setToast({ kind: 'success', message: 'Campaign workflow submitted. Provider dispatch remains approval-gated.' })
@@ -192,8 +291,8 @@ function App() {
     const data = new FormData(event.currentTarget)
     await runAction(async () => {
       await api.approveCampaign(selectedCampaign, String(data.get('approval_id')))
-      setCampaigns(current => current.map(item => item.id === selectedCampaign ? { ...item, status: 'approved', updated: 'Just now' } : item))
-      setToast({ kind: 'success', message: 'Approval signal accepted by the orchestrator.' })
+      await refreshWorkflows()
+      setToast({ kind: 'success', message: 'Approval signal accepted; the queue has been refreshed from Temporal.' })
     })
   }
 
@@ -212,7 +311,7 @@ function App() {
         dimensions: String(data.get('dimensions')),
         price_text: String(data.get('price_text')),
       })
-      setPacks(current => [{ id: packId, product: String(data.get('product_id')), client: tenant?.name ?? 'Tenant', tier: String(data.get('tier')) as StudioPack['tier'], status: 'awaiting_qa', assets: 0, updated: 'Just now' }, ...current])
+      await refreshWorkflows()
       setSelectedPack(packId)
       setModal(null)
       setToast({ kind: 'success', message: 'Studio workflow submitted. Assets must pass human QA before delivery.' })
@@ -222,10 +321,14 @@ function App() {
   async function reviewPack(decision: 'approve' | 'reject', event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
+    if (!qaManifest || (decision === 'approve' && !qaReviewReady)) {
+      setToast({ kind: 'error', message: 'Load and inspect the current QA assets before reviewing this pack.' })
+      return
+    }
     await runAction(async () => {
-      await api.reviewStudioPack(selectedPack, decision, String(data.get('reason') ?? ''))
-      setPacks(current => current.map(item => item.id === selectedPack ? { ...item, status: decision === 'approve' ? 'approved' : 'rejected', updated: 'Just now' } : item))
-      setToast({ kind: 'success', message: decision === 'approve' ? 'QA approval sent. Delivery is controlled by the Studio workflow.' : 'Rejection sent. The pack cannot enter client delivery.' })
+      await api.reviewStudioPack(selectedPack, decision, String(data.get('reason') ?? ''), qaManifest)
+      await refreshWorkflows()
+      setToast({ kind: 'success', message: decision === 'approve' ? 'QA approval sent; delivery status now comes from the Studio workflow.' : 'Rejection sent; the refreshed workflow remains outside client delivery.' })
     })
   }
 
@@ -321,8 +424,8 @@ function App() {
 
         {page === 'overview' && <Overview tenant={tenant} awaitingApprovals={awaitingApprovals} campaigns={campaigns} packs={packs} onNavigate={navigate} onCampaign={id => { setSelectedCampaign(id); navigate('campaigns') }} onPack={id => { setSelectedPack(id); navigate('studio') }} />}
         {page === 'onboarding' && <Onboarding tenant={tenant} connected={tenantConnected} canCreateTenant={authenticated} busy={busy} onModal={setModal} />}
-        {page === 'campaigns' && <Campaigns campaigns={campaigns} selected={selectedCampaign} onSelect={setSelectedCampaign} connected={tenantConnected && api.orchestratorConfigured} busy={busy} onNew={() => setModal('campaign')} onApprove={approveCampaign} />}
-        {page === 'studio' && <Studio packs={packs} selected={selectedPack} onSelect={setSelectedPack} connected={tenantConnected && api.orchestratorConfigured} busy={busy} onNew={() => setModal('pack')} onReview={reviewPack} />}
+        {page === 'campaigns' && <Campaigns campaigns={campaigns} selected={selectedCampaign} onSelect={setSelectedCampaign} connected={workflowFeedReady} busy={busy || feedsLoading} loading={feedsLoading} feedError={feedsError} onRefresh={refreshWorkflows} onNew={() => setModal('campaign')} onApprove={approveCampaign} />}
+        {page === 'studio' && <Studio packs={packs} selected={selectedPack} onSelect={setSelectedPack} connected={workflowFeedReady} busy={busy || feedsLoading} loading={feedsLoading} feedError={feedsError} onRefresh={refreshWorkflows} onNew={() => setModal('pack')} onReview={reviewPack} qaAssets={qaAssets} qaLoading={qaLoading} qaError={qaError} qaImageError={qaImageError} qaManifestReady={qaManifestReady} qaReviewReady={qaReviewReady} onQaLoad={id => setLoadedQaAssets(current => ({ ...current, [id]: true }))} onQaError={() => setQaImageError('One or more QA images could not be loaded. Approval is disabled; refresh the signed asset URLs or reject the pack.')} onQaRefresh={() => setQaReloadToken(current => current + 1)} />}
         {page === 'offers' && <Offers offers={offers} bundles={bundles} live={offersLive} connected={tenantConnected} onSubscribe={(offer, tier) => { setSelectedOffer({ offer, tier }); setModal('subscription') }} />}
         {page === 'settings' && <SettingsPage config={config} user={user} tenant={tenant} connected={tenantConnected} pwa={pwa} busy={busy} onInstall={install} onSignIn={signIn} onSignOut={signOut} onModal={setModal} />}
       </main>
@@ -397,24 +500,33 @@ function Onboarding({ tenant, connected, canCreateTenant, busy, onModal }: { ten
   </div>
 }
 
-function Campaigns({ campaigns, selected, onSelect, connected, busy, onNew, onApprove }: { campaigns: Campaign[]; selected: string; onSelect: (id: string) => void; connected: boolean; busy: boolean; onNew: () => void; onApprove: (event: FormEvent<HTMLFormElement>) => void }) {
+function Campaigns({ campaigns, selected, onSelect, connected, busy, loading, feedError, onRefresh, onNew, onApprove }: { campaigns: Campaign[]; selected: string; onSelect: (id: string) => void; connected: boolean; busy: boolean; loading: boolean; feedError: string | null; onRefresh: () => Promise<void>; onNew: () => void; onApprove: (event: FormEvent<HTMLFormElement>) => void }) {
   const campaign = campaigns.find(item => item.id === selected) ?? campaigns[0]
-  return <div className="page"><PageHeading kicker="Content Cadence" title="Approve the release. Not the risk." copy="Human approval precedes reservation and dispatch. Persistent suppression and tenant suspension checks still run before every new provider call." actions={<button className="button button-primary" onClick={onNew}><Plus size={17} /> New campaign</button>} />
-    <div className="data-label page-data-label">{connected ? 'Submitted workflow records · live refresh not available' : 'Illustrative preview queue · no live actions'}</div>
+  return <div className="page"><PageHeading kicker="Content Cadence" title="Approve the release. Not the risk." copy="Human approval precedes reservation and dispatch. Persistent suppression and tenant suspension checks still run before every new provider call." actions={<><button className="button button-secondary" onClick={() => void onRefresh()} disabled={!connected || loading}><RefreshCw className={loading ? 'spin' : ''} size={16} /> Refresh</button><button className="button button-primary" onClick={onNew}><Plus size={17} /> New campaign</button></>} />
+    <div className="data-label page-data-label">{feedError ? 'Live workflow feed unavailable · actions disabled' : connected ? 'Live Temporal workflow snapshots · refresh every 30 seconds' : 'Illustrative preview queue · no live actions'}</div>
+    {feedError && <div className="feed-error" role="alert"><CircleAlert size={17} /><span>Workflow refresh failed. Human actions are disabled until a current feed loads. {feedError}</span></div>}
     <div className="workspace-grid"><section className="queue-panel"><div className="panel-heading"><h2>Campaign cycles</h2><span>{campaigns.length} in view</span></div><div className="queue-list">{campaigns.map(item => <button key={item.id} className={`queue-item ${item.id === campaign?.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)}><span className="queue-item-top"><strong>{item.name}</strong><StatusBadge status={item.status} /></span><span>{item.client}</span><small>{item.cycle} · {item.updated}</small></button>)}</div></section>
-      {campaign && <section className="review-panel"><div className="review-header"><div><span className="data-label">Release review</span><h2>{campaign.name}</h2><p>{campaign.client} · {campaign.cycle}</p></div><StatusBadge status={campaign.status} /></div><div className="release-facts"><Fact label="Reservation" value={money(campaign.budgetMinor)} /><Fact label="Channels" value={campaign.channels.join(', ')} /><Fact label="Approval timeout" value="24 hours" /><Fact label="Unapproved sends" value="0 permitted" /></div><div className="approval-flow"><span className="complete"><Check size={15} /> Draft</span><ArrowRight size={16} /><span className="current"><UserRoundCheck size={15} /> Human approval</span><ArrowRight size={16} /><span>Policy & dispatch</span></div><form key={campaign.id} onSubmit={onApprove} className="approval-form"><Field label="Approval ID" name="approval_id" defaultValue={`approval-${campaign.id}-01`} required /><ConnectionNote enabled={connected} text="Requires the deployed orchestrator API. Approval is recorded by Temporal; this form never calls a provider directly." /><button className="button button-primary" disabled={!connected || busy || campaign.status !== 'awaiting_approval'}>{busy ? <Loader2 className="spin" size={17} /> : <FileCheck2 size={17} />} Approve for policy-gated dispatch</button></form></section>}
-      {!campaign && <EmptyState title="No live campaign cycles loaded" copy="Submitted campaigns appear in this tab. A live queue feed remains an orchestrator integration requirement; preview records are never carried into an authenticated session." />}
+      {campaign && <section className="review-panel"><div className="review-header"><div><span className="data-label">Release review</span><h2>{campaign.name}</h2><p>{campaign.client} · {campaign.cycle}</p></div><StatusBadge status={campaign.status} /></div><div className="release-facts"><Fact label="Reservation" value={money(campaign.budgetMinor, campaign.currency)} /><Fact label="Channels" value={campaign.channels.length ? campaign.channels.join(', ') : 'Reconciled after dispatch'} /><Fact label="Approval timeout" value="24 hours" /><Fact label="Unapproved sends" value="0 permitted" /></div><div className="approval-flow"><span className="complete"><Check size={15} /> Draft</span><ArrowRight size={16} /><span className="current"><UserRoundCheck size={15} /> Human approval</span><ArrowRight size={16} /><span>Policy & dispatch</span></div><form key={campaign.id} onSubmit={onApprove} className="approval-form"><Field label="Approval ID" name="approval_id" defaultValue={`approval-${campaign.id}-01`} required /><ConnectionNote enabled={connected} text="Approval is signaled to the current Temporal workflow; this form never calls a provider directly." /><button className="button button-primary" disabled={!connected || busy || campaign.status !== 'awaiting_approval'}>{busy ? <Loader2 className="spin" size={17} /> : <FileCheck2 size={17} />} Approve for policy-gated dispatch</button></form></section>}
+      {!campaign && <EmptyState title="No live campaign cycles loaded" copy={loading ? 'Loading tenant-scoped workflow snapshots.' : 'Start a campaign or refresh the tenant-scoped Temporal queue. Preview records are never carried into an authenticated session.'} />}
     </div>
   </div>
 }
 
-function Studio({ packs, selected, onSelect, connected, busy, onNew, onReview }: { packs: StudioPack[]; selected: string; onSelect: (id: string) => void; connected: boolean; busy: boolean; onNew: () => void; onReview: (decision: 'approve' | 'reject', event: FormEvent<HTMLFormElement>) => void }) {
+function Studio({ packs, selected, onSelect, connected, busy, loading, feedError, onRefresh, onNew, onReview, qaAssets, qaLoading, qaError, qaImageError, qaManifestReady, qaReviewReady, onQaLoad, onQaError, onQaRefresh }: { packs: StudioPack[]; selected: string; onSelect: (id: string) => void; connected: boolean; busy: boolean; loading: boolean; feedError: string | null; onRefresh: () => Promise<void>; onNew: () => void; onReview: (decision: 'approve' | 'reject', event: FormEvent<HTMLFormElement>) => void; qaAssets: StudioAsset[]; qaLoading: boolean; qaError: string | null; qaImageError: string | null; qaManifestReady: boolean; qaReviewReady: boolean; onQaLoad: (id: string) => void; onQaError: () => void; onQaRefresh: () => void }) {
   const pack = packs.find(item => item.id === selected) ?? packs[0]
-  return <div className="page"><PageHeading kicker="Shopfront Studio" title="Creative that earns its release." copy="Generated assets stay in tenant-prefixed QA storage until review. Approved outputs become 1080×1080 WhatsApp and 1000×1000 Jumia JPEGs." actions={<button className="button button-primary" onClick={onNew}><Plus size={17} /> New Studio pack</button>} />
-    <div className="data-label page-data-label">{connected ? 'Submitted workflow records · live refresh not available' : 'Illustrative preview queue · no live actions'}</div>
+  return <div className="page"><PageHeading kicker="Shopfront Studio" title="Creative that earns its release." copy="Generated assets stay in tenant-prefixed QA storage until review. Approved outputs become 1080×1080 WhatsApp and 1000×1000 Jumia JPEGs." actions={<><button className="button button-secondary" onClick={() => void onRefresh()} disabled={!connected || loading}><RefreshCw className={loading ? 'spin' : ''} size={16} /> Refresh</button><button className="button button-primary" onClick={onNew}><Plus size={17} /> New Studio pack</button></>} />
+    <div className="data-label page-data-label">{feedError ? 'Live workflow feed unavailable · actions disabled' : connected ? 'Live Temporal workflow snapshots · manifest-bound QA' : 'Illustrative preview queue · no live actions'}</div>
+    {feedError && <div className="feed-error" role="alert"><CircleAlert size={17} /><span>Workflow refresh failed. Human actions are disabled until a current feed loads. {feedError}</span></div>}
     <div className="workspace-grid"><section className="queue-panel"><div className="panel-heading"><h2>Asset packs</h2><span>{packs.length} in view</span></div><div className="queue-list">{packs.map(item => <button key={item.id} className={`queue-item ${item.id === pack?.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)}><span className="queue-item-top"><strong>{item.product}</strong><StatusBadge status={item.status} /></span><span>{item.client}</span><small>{titleCase(item.tier)} · {item.assets || 'Pending'} assets · {item.updated}</small></button>)}</div></section>
-      {pack && <section className="review-panel"><div className="review-header"><div><span className="data-label">Human QA</span><h2>{pack.product}</h2><p>{pack.client} · {pack.id}</p></div><StatusBadge status={pack.status} /></div><div className="asset-schema"><div className="schema-mark"><ImageIcon size={34} /></div><div><strong>Versioned ComfyUI output</strong><p>{pack.assets ? `${pack.assets} generated assets are represented in this queue.` : 'Asset count appears after generation.'} Actual image review requires the deployed object-delivery interface.</p></div></div><div className="release-facts"><Fact label="Pack tier" value={titleCase(pack.tier)} /><Fact label="WhatsApp" value="1080 × 1080 JPEG" /><Fact label="Jumia" value="1000 × 1000 JPEG" /><Fact label="Rejected delivery" value="Blocked" /></div><form onSubmit={event => onReview('approve', event)} className="approval-form"><ConnectionNote enabled={connected} text="Requires the orchestrator and actual QA asset access. Approval here signals the workflow; it does not fabricate delivery." /><button className="button button-primary" disabled={!connected || busy || pack.status !== 'awaiting_qa'}><PackageCheck size={17} /> Approve pack for conversion</button></form><form key={pack.id} onSubmit={event => onReview('reject', event)} className="reject-form"><Field label="Rejection reason" name="reason" placeholder="Describe the quality or brand issue" required={pack.status === 'awaiting_qa'} /><button className="button button-danger-quiet" disabled={!connected || busy || pack.status !== 'awaiting_qa'}><Ban size={16} /> Reject pack</button></form></section>}
-      {!pack && <EmptyState title="No live Studio packs loaded" copy="Submitted packs appear in this tab. A live queue feed and actual object-delivery image review remain deployment integration requirements." />}
+      {pack && <section className="review-panel"><div className="review-header"><div><span className="data-label">Human QA</span><h2>{pack.product}</h2><p>{pack.client} · {pack.id}</p></div><StatusBadge status={pack.status} /></div>
+        {qaLoading && <div className="asset-schema" role="status"><Loader2 className="spin" size={24} /><div><strong>Loading current QA manifest</strong><p>Validating tenant-prefixed objects and issuing short-lived image URLs.</p></div></div>}
+        {qaError && <div className="feed-error" role="alert"><CircleAlert size={17} /><span>{qaError} Approval remains disabled.</span></div>}
+        {qaAssets.length > 0 && <div className="qa-gallery" aria-label={`QA assets for ${pack.product}`}>{qaAssets.map((asset, index) => <a className="qa-asset" key={asset.id} href={asset.url} target="_blank" rel="noreferrer" aria-label={`Open QA asset ${index + 1} in a new tab`}><img src={asset.url} alt={`${pack.product}, QA asset ${index + 1}`} onLoad={() => onQaLoad(asset.id)} onError={onQaError} /><span>QA {String(index + 1).padStart(2, '0')}</span></a>)}</div>}
+        {!qaLoading && !qaError && qaAssets.length === 0 && <div className="asset-schema"><div className="schema-mark"><ImageIcon size={34} /></div><div><strong>{pack.assets ? 'QA assets are not loaded' : 'Versioned ComfyUI output'}</strong><p>{pack.assets ? 'Refresh to validate the current manifest and load its tenant-scoped images.' : 'Asset count and review images appear after generation. Preview records never enable live review.'}</p></div></div>}
+        {qaImageError && <div className="feed-error" role="alert"><CircleAlert size={17} /><span>{qaImageError}</span></div>}
+        {(qaError || qaImageError) && connected && pack.status === 'awaiting_qa' && <button className="button button-secondary qa-refresh" onClick={onQaRefresh} disabled={qaLoading}><RefreshCw className={qaLoading ? 'spin' : ''} size={16} /> Refresh signed asset URLs</button>}
+        <div className="release-facts"><Fact label="Pack tier" value={titleCase(pack.tier)} /><Fact label="WhatsApp" value="1080 × 1080 JPEG" /><Fact label="Jumia" value="1000 × 1000 JPEG" /><Fact label="Rejected delivery" value="Blocked" /></div><form onSubmit={event => onReview('approve', event)} className="approval-form"><ConnectionNote enabled={connected && qaReviewReady} text="Approval requires the current QA manifest and successful loading of every image. The same manifest hash is checked again before delivery." /><button className="button button-primary" disabled={!connected || busy || pack.status !== 'awaiting_qa' || !qaReviewReady}><PackageCheck size={17} /> Approve pack for conversion</button></form><form key={pack.id} onSubmit={event => onReview('reject', event)} className="reject-form"><Field label="Rejection reason" name="reason" placeholder="Describe the quality or brand issue" required={pack.status === 'awaiting_qa'} /><button className="button button-danger-quiet" disabled={!connected || busy || pack.status !== 'awaiting_qa' || !qaManifestReady}><Ban size={16} /> Reject pack</button></form></section>}
+      {!pack && <EmptyState title="No live Studio packs loaded" copy={loading ? 'Loading tenant-scoped workflow snapshots.' : 'Start a Studio pack or refresh the tenant-scoped Temporal queue. Actual object-backed QA images appear after generation.'} />}
     </div>
   </div>
 }
