@@ -27,9 +27,11 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: worker
-          image: ghcr.io/munisp/campaign-worker:0.1.0
+          image: ghcr.io/munisp/campaign-worker:0.2.0
           imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 9091, name: metrics}]
           env:
+            - {name: METRICS_PORT, value: "9091"}
             - {name: TEMPORAL_HOSTPORT, value: temporal-frontend.ops.svc.cluster.local:7233}
             - {name: TEMPORAL_NAMESPACE, value: volumeos}
             - {name: TEMPORAL_TASK_QUEUE, value: campaigns-v1}
@@ -62,3 +64,14 @@ spec:
             capabilities: {drop: [ALL]}
           volumeMounts: [{name: tmp, mountPath: /tmp}]
       volumes: [{name: tmp, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: campaign-worker-metrics
+  namespace: workers
+  labels: {app.kubernetes.io/name: campaign-worker, app.kubernetes.io/part-of: volumeos}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: campaign-worker}
+  ports: [{name: metrics, port: 9091, targetPort: metrics}]
