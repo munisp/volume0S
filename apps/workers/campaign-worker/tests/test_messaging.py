@@ -10,6 +10,7 @@ from messaging import (
     DaprUsageSink,
     GuardedDispatcher,
     HTTPDispatchPolicy,
+    HTTPIdempotencyStore,
     ListMonkProvider,
     PostizProvider,
     ProviderResult,
@@ -61,7 +62,7 @@ class FakeProvider:
 def request(channel="email"):
     return DispatchRequest(
         tenant_id="tenant-1", campaign_id="campaign-1", channel=channel,
-        approval_id="approval-1", content="Approved copy",
+        approval_id="approval-1", content="Approved copy", recipient="owner@example.com",
         postiz_integration_id="channel-1" if channel == "social" else None,
         scheduled_at=datetime(2026, 11, 1, 12, tzinfo=timezone.utc) if channel == "social" else None,
     )
@@ -90,7 +91,7 @@ async def test_denied_dispatch_never_calls_provider():
 
 @pytest.mark.parametrize("change", [
     {"tenant_id": "bad tenant"}, {"campaign_id": ""}, {"approval_id": ""},
-    {"content": " "}, {"channel": "sms"}, {"scheduled_at": datetime(2026, 11, 1)},
+    {"content": " "}, {"recipient": None}, {"channel": "sms"}, {"scheduled_at": datetime(2026, 11, 1)},
 ])
 def test_dispatch_validation_rejects_unsafe_input(change):
     values = request("social") if "scheduled_at" in change else request()
@@ -145,6 +146,29 @@ async def test_postiz_sends_schedule_with_approval_scoped_request():
     await client.aclose()
 
 
+async def test_postiz_resolves_tenant_credential_from_dapr(monkeypatch):
+    monkeypatch.setenv("DAPR_API_TOKEN", "dapr-token")
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        if req.url.path == "/v1.0/secrets/tenant-secrets/postiz-tenant-1-api-key":
+            assert req.headers["dapr-api-token"] == "dapr-token"
+            return httpx.Response(200, json={"postiz-tenant-1-api-key": "tenant-1-key"})
+        if req.url.path == "/api/public/v1/posts":
+            return httpx.Response(200, json={"id": "post-1"})
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = PostizProvider(
+        "http://postiz", client=client, dapr_url="http://dapr", secret_store="tenant-secrets",
+    )
+    result = await provider.send(request("social"), "tenant-1:campaign-1:social")
+    assert result.provider_id == "post-1"
+    assert seen[-1].headers["Authorization"] == "tenant-1-key"
+    await client.aclose()
+
+
 async def test_http_policy_requires_explicit_allow():
     def handler(req):
         return httpx.Response(200, json={"allowed": False, "reason": "suppressed"})
@@ -169,4 +193,42 @@ async def test_dapr_usage_sink_publishes_tenant_scoped_event():
     assert seen[0].url.path == "/v1.0/publish/kafka-pubsub/usage.events"
     assert seen[0].headers["X-VolumeOS-Tenant"] == "tenant-1"
     assert json.loads(seen[0].content)["cost_minor"] == 0
+    await client.aclose()
+
+
+async def test_http_idempotency_store_uses_scoped_persistent_results(monkeypatch):
+    monkeypatch.setenv("VOLUMEOS_SERVICE_TOKEN", "service-token")
+    stored = {}
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        key = req.url.params["key"] if req.method == "GET" else json.loads(req.content)["key"]
+        if req.method == "GET" and key not in stored:
+            return httpx.Response(404, json={"error": "missing"})
+        if req.method == "PUT":
+            stored[key] = json.loads(req.content)
+        return httpx.Response(200, json=stored[key])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    store = HTTPIdempotencyStore("http://tenancy", client)
+    key = "tenant-1:campaign-1:email"
+    assert await store.get(key) is None
+    await store.put(key, ProviderResult("provider-1", 760))
+    assert await store.get(key) == ProviderResult("provider-1", 760)
+    assert all(req.headers["X-VolumeOS-Tenant"] == "tenant-1" for req in seen)
+    assert all(req.headers["Authorization"] == "Bearer service-token" for req in seen)
+    await client.aclose()
+
+
+async def test_http_policy_sends_internal_service_credentials(monkeypatch):
+    monkeypatch.setenv("VOLUMEOS_SERVICE_TOKEN", "service-token")
+
+    def handler(req):
+        assert req.headers["Authorization"] == "Bearer service-token"
+        assert req.headers["X-VolumeOS-Tenant"] == "tenant-1"
+        return httpx.Response(200, json={"allowed": True})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    await HTTPDispatchPolicy("http://tenancy", client).authorize(request())
     await client.aclose()
