@@ -11,16 +11,29 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: volumeos-provisioning
+  namespace: core
+data:
+  keycloak-admin-url: https://keycloak.sec.svc.cluster.local/admin/realms/volumeos
+  keycloak-admin-token-url: https://keycloak.sec.svc.cluster.local/realms/volumeos/protocol/openid-connect/token
+  # The Postiz public API is mounted below /api in the reviewed deployment.
+  postiz-url: http://postiz.core.svc.cluster.local/api
+  # This logical Dapr secret store must be supplied by the private secrets overlay.
+  postiz-secret-store: volumeos-tenant-secrets
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: campaign-worker
   namespace: workers
 data:
   ai-gateway-url: http://svc-ai-gateway.core.svc.cluster.local
   tb-adapter-url: http://tb-adapter.core.svc.cluster.local
   campaign-dispatch-url: http://svc-campaigns.core.svc.cluster.local
-  identity-admin-url: http://svc-identity-admin.core.svc.cluster.local
+  identity-admin-url: http://svc-provisioning.core.svc.cluster.local
   tenancy-url: http://svc-tenancy.core.svc.cluster.local
   listmonk-admin-url: http://listmonk.core.svc.cluster.local
-  postiz-provisioner-url: http://svc-postiz-provisioner.core.svc.cluster.local
+  postiz-provisioner-url: http://svc-provisioning.core.svc.cluster.local
   messaging-url: http://svc-campaigns.core.svc.cluster.local
 ---
 apiVersion: v1
