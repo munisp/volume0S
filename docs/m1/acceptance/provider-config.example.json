@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "environment": "REPLACE_WITH_ENVIRONMENT",
+  "providers": {
+    "email": {"name": "REPLACE_WITH_PROVIDER", "mode": "sandbox", "configured": false},
+    "sms": {"name": "REPLACE_WITH_PROVIDER", "mode": "sandbox", "configured": false},
+    "whatsapp": {"name": "REPLACE_WITH_PROVIDER", "mode": "sandbox", "configured": false},
+    "social": {"name": "postiz-customer-oauth", "mode": "sandbox", "configured": false}
+  },
+  "comfyui": {
+    "namespace": "ai",
+    "deployment": "comfyui"
+  }
+}
