@@ -15,7 +15,8 @@ Status terms match `docs/REQUIREMENTS.md`: **tested**, **configured**, **blocked
 | FLW-1 onboarding | Durable Keycloak → tenancy → ListMonk → existing Postiz OAuth validation → welcome saga with reverse compensation for owned resources; Postiz validation is read-only and TigerBeetle remains M2 | tested / configured |
 | FLW-2 cadence | Existing approval signal is bound to provider dispatch; staging four-channel E2E remains | configured |
 | AI-4 studio | Versioned ComfyUI graph, upload/submit/poll activities, tenant-prefixed asset keys, QA approve/reject signal, delivery only after approval | tested / configured |
-| OBS-2 SLO dashboards | M1 dashboard definitions and live traces require cluster deployment | later in M1 acceptance |
+| OBS-2/6 SLO dashboards and probes | Reviewed Core API, per-cycle dispatch, approval/Studio dashboard and alert definitions; fail-closed absent-series alerts; metric instrumentation, five-minute probes, WhatsApp receiver, and live traces still require implementation/cluster validation | configured / staging acceptance required |
+| NFR-2/3/4, BR-5/23/24 acceptance | Fail-closed preflight, 16-check evidence catalog, checksummed artifacts, and runbook cover SLO, recovery, onboarding, kill-switch, security, GPU, and cost drills | tested tooling / staging evidence blocked |
 | OBS-3 Wazuh | Official v4.14.9 source reviewed; upstream bootstrap credentials/certificates must be replaced by the secret pipeline before activation | blocked |
 | M1 outcome | First paying clients onboarded end to end in staging | blocked on real cluster, providers, OIDC/MFA, and acceptance evidence |
 
@@ -30,6 +31,12 @@ The repository supplies environment names and secret-injection manifests, not li
 ## Commercial-data boundary
 
 The Q1 launch kit says its founding rates are valid for 90 days. The catalog therefore records the supplied price book without asserting that those prices are currently active. An operator must review and activate a dated price book before using it for quotes or billing. No billing postings are created in M1; TigerBeetle remains M2.
+
+## Staging acceptance and observability assets
+
+`docs/m1/STAGING_ACCEPTANCE.md` and `scripts/staging_acceptance.py` provide a read-only preflight and a fail-closed evidence workflow. The 16-check catalog maps operational drills to requirement IDs; a passing check needs a real artifact, and final verification requires passing preflight plus all checks with matching SHA-256 artifact hashes. The utility tests prove the tooling behavior, not staging health.
+
+`monitoring/m1/` contains the M1 PrometheusRule, ServiceMonitor, and Grafana dashboard source. `docs/m1/OBSERVABILITY.md` defines the required metrics and activation boundary. These resources are deliberately not auto-synced before service/probe instrumentation exists; no-data or absent-series conditions are not successful SLO evidence. Pay probes and TigerBeetle recovery remain M2 scope.
 
 ## Acceptance still required
 
