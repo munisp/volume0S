@@ -133,7 +133,7 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subscription, err := a.store.CreateSubscription(r.Context(), claimsFrom(r.Context()).TenantID, input.Offer, input.Tier)
-	respond(w, r, http.StatusOK, subscription, err)
+	respond(w, r, http.StatusCreated, subscription, err)
 }
 
 func (a *API) authorizeDispatch(w http.ResponseWriter, r *http.Request) {
