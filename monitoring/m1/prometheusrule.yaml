@@ -1,0 +1,98 @@
+# NFR-2/OBS-2/OBS-6 definitions. Requires docs/m1/OBSERVABILITY.md instrumentation.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: volumeos-m1-slo
+  namespace: ops
+  labels: {app.kubernetes.io/part-of: volumeos, release: prometheus-grafana}
+spec:
+  groups:
+    - name: volumeos-m1-core-api
+      rules:
+        - record: volumeos:core_api_availability:ratio_rate5m
+          expr: |
+            1 - (
+              sum(rate(volumeos_http_requests_total{service="svc-tenancy",code=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(volumeos_http_requests_total{service="svc-tenancy"}[5m])), 0.000000001)
+            )
+        - alert: VolumeOSCoreAPIMetricsAbsent
+          expr: absent(volumeos_http_requests_total{service="svc-tenancy"})
+          for: 5m
+          labels: {severity: page, requirement: NFR-2}
+          annotations:
+            summary: Core API SLO metrics are absent
+            description: Instrumentation or scraping is broken; availability is unknown and must not be reported as passing.
+        - alert: VolumeOSCoreAPIHighErrorBudgetBurn
+          expr: |
+            (
+              sum(rate(volumeos_http_requests_total{service="svc-tenancy",code=~"5.."}[1h]))
+              /
+              clamp_min(sum(rate(volumeos_http_requests_total{service="svc-tenancy"}[1h])), 0.000000001)
+            ) > 0.072
+            and
+            (
+              sum(rate(volumeos_http_requests_total{service="svc-tenancy",code=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(volumeos_http_requests_total{service="svc-tenancy"}[5m])), 0.000000001)
+            ) > 0.072
+          for: 2m
+          labels: {severity: page, requirement: NFR-2}
+          annotations:
+            summary: Core API is burning its 99.5% monthly error budget rapidly
+        - alert: VolumeOSCoreAPISlowErrorBudgetBurn
+          expr: |
+            (
+              sum(rate(volumeos_http_requests_total{service="svc-tenancy",code=~"5.."}[6h]))
+              /
+              clamp_min(sum(rate(volumeos_http_requests_total{service="svc-tenancy"}[6h])), 0.000000001)
+            ) > 0.03
+            and
+            (
+              sum(rate(volumeos_http_requests_total{service="svc-tenancy",code=~"5.."}[30m]))
+              /
+              clamp_min(sum(rate(volumeos_http_requests_total{service="svc-tenancy"}[30m])), 0.000000001)
+            ) > 0.03
+          for: 15m
+          labels: {severity: ticket, requirement: NFR-2}
+          annotations:
+            summary: Core API is burning its 99.5% monthly error budget
+    - name: volumeos-m1-dispatch
+      rules:
+        - record: volumeos:campaign_dispatch_success_ratio:cycle
+          expr: |
+            (
+              sum by (tenant_id, campaign_id, cycle_id) (volumeos_campaign_cycle_dispatches{result="success"})
+              /
+              clamp_min(sum by (tenant_id, campaign_id, cycle_id) (volumeos_campaign_cycle_dispatches), 0.000000001)
+            )
+            and
+            (sum by (tenant_id, campaign_id, cycle_id) (volumeos_campaign_cycle_dispatches) > 0)
+        - alert: VolumeOSCampaignCycleSLAViolation
+          expr: volumeos:campaign_dispatch_success_ratio:cycle < 0.99
+          labels: {severity: page, requirement: BR-18}
+          annotations:
+            summary: Campaign cycle is below the 99% dispatch SLA
+            description: Investigate tenant {{ $labels.tenant_id }}, campaign {{ $labels.campaign_id }}, cycle {{ $labels.cycle_id }} using sanitized workflow and provider audits.
+        - alert: VolumeOSCampaignCycleMetricsAbsent
+          expr: absent(volumeos_campaign_cycle_dispatches)
+          for: 15m
+          labels: {severity: ticket, requirement: OBS-2}
+          annotations:
+            summary: Per-cycle dispatch metrics are absent
+            description: No per-cycle SLA can be calculated. This is an observability gap, not proof of a failed campaign.
+    - name: volumeos-m1-synthetic
+      rules:
+        - alert: VolumeOSSyntheticJourneyMetricsAbsent
+          expr: absent(probe_success{journey="login"}) or absent(probe_success{journey="send"})
+          for: 10m
+          labels: {severity: page, requirement: OBS-6}
+          annotations:
+            summary: M1 login or send synthetic metrics are absent
+        - alert: VolumeOSSyntheticJourneyFailing
+          expr: avg_over_time(probe_success{journey=~"login|send"}[15m]) < 1
+          for: 15m
+          labels: {severity: page, requirement: OBS-6}
+          annotations:
+            summary: Synthetic {{ $labels.journey }} journey has failed samples
+            description: M1 login and send probes must run every five minutes. The pay probe becomes mandatory in M2.
