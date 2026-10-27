@@ -2,15 +2,21 @@ SHELL := /bin/bash
 K ?= kubectl
 ARGOCD_CHART_VERSION := 10.11.6
 PYTHON ?= python3
+NPM ?= npm
 
-.PHONY: verify test test-staging-acceptance apply-namespaces bootstrap-argocd apply-apps configure-secrets configure-m1-secrets
+.PHONY: verify test test-console test-staging-acceptance apply-namespaces bootstrap-argocd apply-apps configure-secrets configure-m1-secrets
 verify:
 	$(PYTHON) scripts/verify_repo.py
 
 test-staging-acceptance:
 	$(PYTHON) -m unittest discover -s scripts/tests -v
 
-test: verify test-staging-acceptance
+test-console:
+	cd apps/console && $(NPM) install
+	cd apps/console && $(NPM) run build
+	cd apps/console && $(NPM) run lint
+
+test: verify test-staging-acceptance test-console
 	cd apps/core/svc-tenancy && go test ./...
 	cd apps/core/svc-provisioning && go test ./...
 	cd apps/workers/campaign-worker && $(PYTHON) -m pytest
