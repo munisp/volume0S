@@ -19,6 +19,7 @@ This repository currently implements the **M0 foundation plus an M1 offer, messa
 - **Event contracts:** Protobuf envelopes and usage, money, lead, message-status, and audit-publish records; `money.events` is explicitly a mirror, not a ledger.
 - **GitOps:** pinned Argo CD applications, Dapr mTLS, APISIX + open-appsec, Strimzi Kafka and seven topics, PostgreSQL, Redis, MinIO buckets, Keycloak, OpenSearch, Temporal, observability, Kubecost, and OpenCTI. M1 adds reviewed ListMonk and Postiz packaging; Wazuh is pinned but deliberately not auto-synced before its private secret overlay.
 - **Verification:** Go, Python, and Rust tests; static manifest/source checks; CI for tests, lint, and Kustomize rendering.
+- **M1 acceptance tooling:** fail-closed, read-only staging preflight; requirement-mapped evidence capture with SHA-256 artifact verification; reviewed SLO dashboard/alert definitions and an operational drill runbook. These tools do not assert that staging has passed, and the monitoring resources remain unapplied until the required service/probe instrumentation exists.
 
 ## Intentionally not represented as complete
 
@@ -39,7 +40,9 @@ bootstrap/platform/             Kafka, topics, identity/worker config, API route
 deploy/overlays/                dev / stage / prod Kustomize overlays
 policies/                       Default-deny network policy baseline
 scripts/verify_repo.py          Cluster-independent repository gate
-docs/                           Requirement traceability and ADRs
+scripts/staging_acceptance.py   Fail-closed staging preflight and evidence verifier
+monitoring/m1/                  M1 metric-dependent alerts, scrape config, dashboard
+docs/                           Requirements, ADRs, observability contract, acceptance runbook
 ```
 
 ## Local verification
@@ -49,6 +52,7 @@ Required tools: Go 1.23+, Python 3.12+, Rust 1.82+, and PyYAML.
 ```bash
 python3 -m pip install pyyaml
 python3 scripts/verify_repo.py
+python3 -m unittest discover -s scripts/tests -v
 
 cd apps/core/svc-tenancy
 go test ./...
@@ -124,5 +128,7 @@ Sync waves order resources during an Argo sync operation; they are **not** a sub
 - Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48-hour turnaround.
 - Replace Wazuh bootstrap credentials/certificates before activation, then run the purple-team detection drill.
 - Reconcile provider cost with `usage.events` and publish M1 SLO dashboards.
+
+Use [`docs/m1/STAGING_ACCEPTANCE.md`](docs/m1/STAGING_ACCEPTANCE.md) to run the preflight and capture real evidence. The current repository supplies the acceptance process and monitoring definitions; it does not contain a passing staging evidence bundle. See [`docs/m1/OBSERVABILITY.md`](docs/m1/OBSERVABILITY.md) before applying `monitoring/m1/`.
 
 See [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) and [`docs/m1/REQUIREMENTS.md`](docs/m1/REQUIREMENTS.md) for requirement-level status.
