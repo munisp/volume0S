@@ -2,7 +2,7 @@
 
 Open-source-first operating platform for the Naira Volume Playbook: multi-tenant service delivery, prepaid operations, durable workflows, and geospatial market intelligence for Nigerian MSMEs.
 
-This repository currently implements the **M0 foundation plus an M1 offer, messaging, onboarding, and Studio vertical slice**. It does not claim that M1 staging acceptance or the later money, lakehouse, AI-runtime, security-operations, or operator-console milestones are complete.
+This repository currently implements the **M0 foundation plus an M1 offer, messaging, onboarding, Studio, and responsive operator-console vertical slice**. It does not claim that M1 staging acceptance or the later money, lakehouse, AI-runtime, or security-operations milestones are complete.
 
 ## Implemented
 
@@ -18,16 +18,18 @@ This repository currently implements the **M0 foundation plus an M1 offer, messa
 - **Money contract (Rust):** deterministic two-phase reserve/post/void state machine with replay and idempotency-conflict tests. The live TigerBeetle transport is an M2 deliverable.
 - **Event contracts:** Protobuf envelopes and usage, money, lead, message-status, and audit-publish records; `money.events` is explicitly a mirror, not a ledger.
 - **GitOps:** pinned Argo CD applications, Dapr mTLS, APISIX + open-appsec, Strimzi Kafka and seven topics, PostgreSQL, Redis, MinIO buckets, Keycloak, OpenSearch, Temporal, observability, Kubecost, and OpenCTI. M1 adds reviewed ListMonk and Postiz packaging; Wazuh is pinned but deliberately not auto-synced before its private secret overlay.
-- **Verification:** Go, Python, and Rust tests; static manifest/source checks; CI for tests, lint, and Kustomize rendering.
+- **M1 operator console (React/PWA):** responsive desktop/mobile onboarding, catalog, approval, Studio QA, and safety screens; OIDC PKCE; installable offline application shell; real Core API integration; and fail-closed preview/live separation. Orchestrator HTTP deployment, live queue feeds, and actual Studio object review remain explicit boundaries.
+- **Verification:** Go, Python, Rust, and TypeScript checks; static manifest/source checks; CI for tests, lint, and Kustomize rendering.
 - **M1 observability and acceptance tooling:** Core request, campaign cycle/provider, Studio outcome, and five-minute login/send synthetic instrumentation; internal ServiceMonitors; fail-closed, read-only staging preflight; requirement-mapped evidence capture with SHA-256 artifact verification; and reviewed SLO dashboard/alert definitions. These tools do not assert that staging has passed. The dedicated provider-sandbox send endpoint, private probe configuration, published images, and live evidence remain required.
 
 ## Intentionally not represented as complete
 
-ListMonk and Postiz are configured but still require staging health, tenant provisioning, provider, backup, and isolation acceptance. The private `volumeos-tenant-secrets` Dapr component and per-tenant Postiz keys remain operator-supplied. Wazuh is not active: the upstream base contains bootstrap credentials and certificate inputs that must be replaced through a reviewed private overlay. The ComfyUI GPU runtime and model licenses are operator-supplied acceptance items. The APISIX-to-Keycloak OIDC plugin secret, TigerBeetle transport, Flink/Spark/Sedona/Ray workloads, DataFusion service, and console remain milestone work. The Rust reservation book is a contract model, not a running TigerBeetle adapter.
+ListMonk and Postiz are configured but still require staging health, tenant provisioning, provider, backup, and isolation acceptance. The private `volumeos-tenant-secrets` Dapr component and per-tenant Postiz keys remain operator-supplied. Wazuh is not active: the upstream base contains bootstrap credentials and certificate inputs that must be replaced through a reviewed private overlay. The ComfyUI GPU runtime and model licenses are operator-supplied acceptance items. The APISIX-to-Keycloak OIDC plugin secret, TigerBeetle transport, Flink/Spark/Sedona/Ray workloads, and DataFusion service remain milestone work. The console's orchestrator HTTP service, live queue feeds, and Studio object-delivery review interface also remain integration work. The Rust reservation book is a contract model, not a running TigerBeetle adapter.
 
 ## Repository layout
 
 ```text
+apps/console/                   Responsive installable M1 operator console
 apps/core/svc-tenancy/          Go API, OIDC, PostgreSQL, messaging policy, tests
 apps/core/svc-provisioning/     Keycloak and Postiz onboarding boundary, tests
 apps/workers/campaign-worker/   Campaign/onboarding workflows, messaging adapters, tests
@@ -49,14 +51,20 @@ docs/                           Requirements, ADRs, observability, image and acc
 
 ## Local verification
 
-Required tools: Go 1.23+, Python 3.12+, Rust 1.82+, and PyYAML.
+Required tools: Go 1.23+, Python 3.12+, Rust 1.82+, Node.js 22.12+, npm, and PyYAML.
 
 ```bash
 python3 -m pip install pyyaml
 python3 scripts/verify_repo.py
 python3 -m unittest discover -s scripts/tests -v
 
-cd apps/core/svc-tenancy
+cd apps/console
+npm install
+npm run build
+npm run lint
+npm audit --audit-level=low
+
+cd ../core/svc-tenancy
 go test ./...
 
 cd ../svc-provisioning
@@ -134,7 +142,8 @@ Sync waves order resources during an Argo sync operation; they are **not** a sub
 - Provision a reviewed GPU runtime/model, run a real Studio pack, and verify rejection isolation and 48-hour turnaround.
 - Replace Wazuh bootstrap credentials/certificates before activation, then run the purple-team detection drill.
 - Build and publish the changed service/worker/probe images, configure the dedicated synthetic sandbox send endpoint and credentials, verify five-minute login/send evidence and alert delivery, reconcile provider cost with `usage.events`, and publish M1 SLO dashboards.
+- Deploy the console with real PKCE/MFA and tenant-scoped API/CORS policy; verify live Core actions, no preview records after authentication, deployed orchestrator contracts, and actual Studio asset review before enabling operational approvals.
 
-Use [`docs/m1/IMAGE_DELIVERY.md`](docs/m1/IMAGE_DELIVERY.md) for production-fidelity builds, nonroot smoke checks, GHCR publication, and immutable digest verification. Then use [`docs/m1/STAGING_ACCEPTANCE.md`](docs/m1/STAGING_ACCEPTANCE.md) to run the preflight and capture real evidence. The current repository supplies instrumentation, the acceptance process, and monitoring definitions; it does not contain a passing staging evidence bundle. See [`docs/m1/OBSERVABILITY.md`](docs/m1/OBSERVABILITY.md) before applying `monitoring/m1/`.
+Use [`docs/m1/IMAGE_DELIVERY.md`](docs/m1/IMAGE_DELIVERY.md) for production-fidelity builds, nonroot smoke checks, GHCR publication, and immutable digest verification. Then use [`docs/m1/STAGING_ACCEPTANCE.md`](docs/m1/STAGING_ACCEPTANCE.md) to run the preflight and capture real evidence. The current repository supplies instrumentation, the acceptance process, and monitoring definitions; it does not contain a passing staging evidence bundle. See [`docs/m1/OBSERVABILITY.md`](docs/m1/OBSERVABILITY.md) before applying `monitoring/m1/`. Console setup, browser verification, and deployment gates are documented in [`docs/m1/CONSOLE.md`](docs/m1/CONSOLE.md).
 
 See [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) and [`docs/m1/REQUIREMENTS.md`](docs/m1/REQUIREMENTS.md) for requirement-level status.
