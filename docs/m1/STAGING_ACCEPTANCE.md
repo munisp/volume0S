@@ -11,7 +11,8 @@ Prerequisites:
 - Real provider sandboxes for email, SMS, WhatsApp, and social. Customer social OAuth must already be connected; VolumeOS must not invent or delete it.
 - The private `volumeos-tenant-secrets` Dapr component and tenant-scoped Postiz keys.
 - A reviewed ComfyUI deployment, model licence, and GPU capacity.
-- Deployed instrumented images and the M1 monitoring resources. Do not activate alerts against placeholder metrics.
+- Built and published `0.2.0` Core/campaign/Studio and `0.1.0` synthetic-probe images, plus the M1 monitoring resources. Do not activate alerts against placeholder metrics.
+- A dedicated synthetic tenant and least-privilege OIDC client, the private `workers/synthetic-probe` ConfigMap and Secret, and a pre-approved provider-sandbox send endpoint returning a completed synthetic receipt. A health endpoint or generic campaign route is not a substitute; see `docs/m1/OBSERVABILITY.md`.
 
 Copy `provider-config.example.json` to a private operator location and replace every placeholder. The file identifies configuration only; it must not contain API keys, tokens, passwords, recipient addresses, or connection URLs with credentials.
 
@@ -27,7 +28,7 @@ python3 scripts/staging_acceptance.py preflight \
   --output "$RUN_DIR"
 ```
 
-Preflight is read-only. It checks provider declarations, cluster access, required deployments, secret names/keys, the Dapr tenant store, GPU capacity, and monitoring resources. It does not output secret values. A nonzero exit means acceptance is blocked; fix the actual prerequisite rather than editing the JSON result.
+Preflight is read-only. It checks provider declarations, cluster access, required deployments (including Studio and the synthetic probe), secret names/keys in their actual namespaces, the Dapr tenant store, GPU capacity, and Core/worker/probe scrape resources. It does not output secret values. A nonzero exit means acceptance is blocked; fix the actual prerequisite rather than editing the JSON result.
 
 ## 2. Execute and preserve evidence
 
@@ -94,7 +95,7 @@ The recovery report must separately state RPO and RTO measurements and any data 
 
 ## 5. Remaining boundaries
 
-The public monitoring resources are not automatically synced before instrumentation. Apply them only after implementing and validating `docs/m1/OBSERVABILITY.md`:
+The public monitoring resources are not automatically synced. Apply them only after deploying the instrumented images, configuring the real synthetic sandbox journey, and validating the activation boundary in `docs/m1/OBSERVABILITY.md`:
 
 ```bash
 kubectl --context '<explicit-staging-context>' apply -k monitoring/m1
