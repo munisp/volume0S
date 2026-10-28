@@ -95,3 +95,19 @@ spec:
   config:
     retention.ms: 220752000000
     min.insync.replicas: 2
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: usage.rollups
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    cleanup.policy: compact
+    max.compaction.lag.ms: 3600000
+    min.insync.replicas: 2

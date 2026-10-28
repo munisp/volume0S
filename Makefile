@@ -4,9 +4,12 @@ ARGOCD_CHART_VERSION := 10.11.6
 PYTHON ?= python3
 NPM ?= npm
 
-.PHONY: verify test test-console test-staging-acceptance apply-namespaces bootstrap-argocd apply-apps configure-secrets configure-m1-secrets
+.PHONY: verify test test-console test-offer-operations test-staging-acceptance apply-namespaces bootstrap-argocd apply-apps configure-secrets configure-m1-secrets
 verify:
 	$(PYTHON) scripts/verify_repo.py
+	$(PYTHON) scripts/verify_m3.py
+	$(PYTHON) scripts/verify_m4.py
+	$(PYTHON) scripts/verify_native.py
 
 test-staging-acceptance:
 	$(PYTHON) -m unittest discover -s scripts/tests -v
@@ -16,9 +19,18 @@ test-console:
 	cd apps/console && $(NPM) run build
 	cd apps/console && $(NPM) run lint
 
-test: verify test-staging-acceptance test-console
+test-offer-operations:
+	cd apps/core/svc-conversations && $(PYTHON) -m pytest
+	cd apps/core/svc-orchestrator && $(PYTHON) -m pytest
+	cd apps/core/svc-privacy && $(PYTHON) -m pytest
+	cd apps/core/svc-leads && $(PYTHON) -m pytest
+	cd apps/workers/offer-worker && $(PYTHON) -m pytest
+	$(PYTHON) -m pytest scripts/test_native_contracts.py scripts/test_restore_drill.py
+
+test: verify test-staging-acceptance test-console test-offer-operations
 	cd apps/core/svc-tenancy && go test ./...
 	cd apps/core/svc-provisioning && go test ./...
+	cd apps/core/svc-orchestrator && $(PYTHON) -m pytest
 	cd apps/workers/campaign-worker && $(PYTHON) -m pytest
 	cd apps/workers/studio-worker && $(PYTHON) -m pytest
 	cd apps/workers/synthetic-probe && $(PYTHON) -m pytest
@@ -74,5 +86,8 @@ configure-m1-secrets:
 		--from-literal=listmonk-admin-user=admin --from-literal=listmonk-admin-password="$(LISTMONK_ADMIN_PASSWORD)" \
 		--dry-run=client -o yaml | $(K) apply -f -
 	$(K) -n workers create secret generic studio-worker --from-literal=AWS_ACCESS_KEY_ID="$(AWS_ACCESS_KEY_ID)" \
+		--from-literal=AWS_SECRET_ACCESS_KEY="$(AWS_SECRET_ACCESS_KEY)" --from-literal=AWS_DEFAULT_REGION=us-east-1 \
+		--dry-run=client -o yaml | $(K) apply -f -
+	$(K) -n core create secret generic svc-orchestrator --from-literal=AWS_ACCESS_KEY_ID="$(AWS_ACCESS_KEY_ID)" \
 		--from-literal=AWS_SECRET_ACCESS_KEY="$(AWS_SECRET_ACCESS_KEY)" --from-literal=AWS_DEFAULT_REGION=us-east-1 \
 		--dry-run=client -o yaml | $(K) apply -f -

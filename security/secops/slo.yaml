@@ -1,0 +1,20 @@
+version: 1
+window: 30d
+services:
+  orchestrator:
+    availability: {target: 0.999, indicator: valid_non_5xx_responses / valid_requests}
+    approval_signal_latency: {target: 0.99, threshold_seconds: 5, indicator: signals_applied_within_threshold / valid_signals}
+  campaign_dispatch:
+    successful_accepted_dispatches: {target: 0.995, indicator: accepted_provider_dispatches / approved_eligible_dispatches}
+    duplicate_dispatch: {target: 0, indicator: duplicate_provider_dispatches}
+  studio_delivery:
+    reviewed_delivery_success: {target: 0.99, indicator: verified_manifest_deliveries / approved_delivery_attempts}
+  privacy:
+    dsar_export: {target: 1.0, deadline_days: 30, indicator: verified_exports_completed_within_deadline / due_exports}
+    dsar_delete_propagation: {target: 1.0, deadline_days: 30, indicator: complete_target_acknowledgements_within_deadline / due_deletions}
+  census_sync:
+    acknowledged_upload_integrity: {target: 1.0, indicator: digest_verified_acknowledged_chunks / acknowledged_chunks}
+error_budget:
+  fast_burn: {window: 1h, consumed_fraction: 0.143, action: page-and-freeze-rollouts}
+  slow_burn: {window: 6h, consumed_fraction: 0.06, action: create-incident-and-prioritize-reliability}
+  exhausted: [freeze-feature-rollouts, preserve-human-approval-gates, do-not-disable-tenant-or-money-safety-controls]

@@ -1,8 +1,12 @@
-//! Two-phase money semantics shared by the future TigerBeetle transport (BIL-2/P7).
+//! VolumeOS money semantics (BIL-1/BIL-2/P2/P7).
 //!
-//! This crate intentionally contains no PostgreSQL balance store. `ReservationBook`
-//! is a deterministic contract model used by tests; production transports must
-//! preserve the same idempotency and transition rules over TigerBeetle.
+//! `ledger` contains the production account taxonomy and idempotent two-phase
+//! operations. `tigerbeetle` connects those operations to the official live
+//! client. `ReservationBook` remains only as the original deterministic contract
+//! model for compatibility tests; it is not a production financial store.
+
+pub mod ledger;
+pub mod tigerbeetle;
 
 use std::collections::HashMap;
 use std::fmt;

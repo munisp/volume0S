@@ -1,0 +1,44 @@
+version: 1
+destination: opensearch
+required_fields: [timestamp, tenant_hash, actor_hash, action, outcome, source_service]
+rules:
+  - id: VOS-AUTH-001
+    title: Repeated OIDC validation failure
+    mitre: [T1078, T1110]
+    severity: high
+    threshold: {count: 10, window: 5m, group_by: [source_ip, tenant_hash]}
+    match: {action: oidc.validate, outcome: failure}
+  - id: VOS-TENANT-002
+    title: Cross-tenant access or RLS denial
+    mitre: [T1530, T1190]
+    severity: critical
+    threshold: {count: 1, window: 1m, group_by: [tenant_hash]}
+    match_any: [{action: tenant.access, outcome: denied}, {action: postgres.rls, outcome: denied}]
+  - id: VOS-MONEY-003
+    title: Financial transfer replay conflict
+    mitre: [T1565, T0857]
+    severity: critical
+    threshold: {count: 1, window: 1m, group_by: [tenant_hash, idempotency_hash]}
+    match: {action: tigerbeetle.transfer, outcome: replay_conflict}
+  - id: VOS-APPROVAL-004
+    title: Dispatch or Studio delivery without approval
+    mitre: [T1565, T0854]
+    severity: critical
+    threshold: {count: 1, window: 1m, group_by: [tenant_hash, resource_id]}
+    match_any: [{action: campaign.dispatch, approval: missing}, {action: studio.deliver, approval: missing}]
+  - id: VOS-PRIVACY-005
+    title: DSAR deletion propagation stalled
+    mitre: [T1485]
+    severity: high
+    threshold: {age_minutes: 1440, status: deleting}
+    match: {action: dsar.delete}
+  - id: VOS-AI-006
+    title: External AI redaction boundary bypass
+    mitre: [T1567, T1059]
+    severity: critical
+    threshold: {count: 1, window: 1m, group_by: [source_service]}
+    match: {action: ai.provider.egress, redacted: false}
+response:
+  critical: [page-security-oncall, freeze-tenant-provider-egress, preserve-evidence]
+  high: [create-security-case, notify-service-owner, preserve-evidence]
+privacy: Never place raw subject identifiers, prompts, tokens, payment references, or suppression secrets in alerts.

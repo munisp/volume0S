@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: svc-conversations
+  namespace: core
+  labels: {app.kubernetes.io/name: svc-conversations, app.kubernetes.io/part-of: volumeos}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-conversations
+  namespace: core
+  labels: {app.kubernetes.io/name: svc-conversations, app.kubernetes.io/part-of: volumeos}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app.kubernetes.io/name: svc-conversations}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: svc-conversations, app.kubernetes.io/part-of: volumeos}
+    spec:
+      serviceAccountName: svc-conversations
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: api
+          image: ghcr.io/munisp/svc-conversations:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080, name: http}]
+          env:
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: svc-conversations, key: database-url}}
+            - name: VOLUMEOS_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: svc-conversations, key: service-token}}
+            - name: SUBJECT_DIGEST_KEY
+              valueFrom: {secretKeyRef: {name: svc-conversations, key: subject-digest-key}}
+            - name: WHATSAPP_APP_SECRET
+              valueFrom: {secretKeyRef: {name: svc-conversations, key: whatsapp-app-secret}}
+            - name: WHATSAPP_ACCESS_TOKEN
+              valueFrom: {secretKeyRef: {name: svc-conversations, key: whatsapp-access-token}}
+            - name: PRIVACY_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-front-desk, key: privacy-service-url}}
+            - name: WHATSAPP_API_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-front-desk, key: whatsapp-api-url}}
+            - name: BOOKING_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-front-desk, key: booking-service-url}}
+            - name: FRONT_DESK_MODEL_VERSION
+              valueFrom: {configMapKeyRef: {name: volumeos-front-desk, key: model-version}}
+            - name: OIDC_ISSUER
+              valueFrom: {configMapKeyRef: {name: volumeos-oidc, key: issuer}}
+            - name: OIDC_AUDIENCE
+              valueFrom: {configMapKeyRef: {name: volumeos-oidc, key: audience}}
+            - name: OIDC_JWKS_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-oidc, key: jwks-url}}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 10, timeoutSeconds: 5}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20, timeoutSeconds: 5}
+          resources: {requests: {cpu: 200m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-conversations
+  namespace: core
+  labels: {app.kubernetes.io/name: svc-conversations, app.kubernetes.io/part-of: volumeos}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: svc-conversations}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: svc-conversations
+  namespace: core
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: svc-conversations}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: gateway}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: core}}
+      ports: [{port: 8080, protocol: TCP}]
+  egress:
+    - ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: data}}
+      ports: [{port: 5432, protocol: TCP}]
+    # The cluster egress gateway allowlists only OIDC, privacy, booking, and WhatsApp HTTPS hosts.
+    - ports: [{port: 443, protocol: TCP}]

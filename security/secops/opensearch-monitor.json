@@ -1,0 +1,8 @@
+{
+  "type": "monitor",
+  "monitor_type": "query_level_monitor",
+  "enabled": true,
+  "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
+  "inputs": [{"search": {"indices": ["volumeos-security-*"], "query": {"size": 0, "query": {"bool": {"filter": [{"range": {"@timestamp": {"gte": "now-5m"}}}, {"terms": {"rule.id": ["VOS-AUTH-001", "VOS-TENANT-002", "VOS-MONEY-003", "VOS-APPROVAL-004", "VOS-AI-006"]}}]}}}}}],
+  "triggers": [{"name": "VolumeOS critical detection", "severity": "1", "condition": {"script": {"source": "ctx.results[0].hits.total.value > 0", "lang": "painless"}}, "actions": [{"name": "security-case-webhook", "destination_id": "${SECURITY_CASE_DESTINATION_ID}", "subject_template": {"source": "VolumeOS security detection", "lang": "mustache"}, "message_template": {"source": "A mapped detection fired. Review the sanitized OpenSearch evidence and Wazuh case.", "lang": "mustache"}, "throttle_enabled": true, "throttle": {"value": 10, "unit": "MINUTES"}}]}]
+}

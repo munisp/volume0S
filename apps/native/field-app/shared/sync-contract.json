@@ -1,0 +1,11 @@
+{
+  "server": "apps/core/svc-census-sync",
+  "chunk_size_bytes": 262144,
+  "max_chunks": 64,
+  "max_payload_bytes": 8388608,
+  "digest": "sha256",
+  "start": {"method": "POST", "path": "/v1/tenants/{tenant_id}/census/uploads", "required": ["upload_id", "event_id", "total_chunks", "total_bytes", "payload_sha256", "captured_at_unix", "latitude", "longitude", "accuracy_m", "consent_reference", "lawful_basis"]},
+  "resume": {"server_field": "resume", "client_rule": "upload only the returned missing chunk indexes"},
+  "chunk": {"method": "PUT", "path": "/v1/tenants/{tenant_id}/census/uploads/{upload_id}/chunks/{index}", "headers": ["Authorization", "X-VolumeOS-Device", "Idempotency-Key"], "required": ["index", "encoded", "expected_sha256"]},
+  "complete": {"method": "POST", "path": "/v1/tenants/{tenant_id}/census/uploads/{upload_id}/complete", "acknowledged_only_when": "status=published and event_id matches the deterministic local event"}
+}

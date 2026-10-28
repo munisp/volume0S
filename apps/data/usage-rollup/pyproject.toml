@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "volumeos-usage-rollup"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "aiokafka>=0.12,<1",
+  "temporalio>=1.18,<2",
+]
+
+[project.optional-dependencies]
+flink = ["apache-flink==1.20.2"]
+test = ["pytest>=8,<9", "pytest-asyncio>=0.25,<1"]
+
+[tool.setuptools]
+py-modules = ["contracts", "dispatcher", "rollup_job"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

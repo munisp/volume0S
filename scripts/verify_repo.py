@@ -86,6 +86,10 @@ for env in ("dev", "stage", "prod"):
         errors.append(f"{path.relative_to(ROOT)}: svc-provisioning is not deployed")
     if "../../../apps/core/svc-orchestrator/k8s" not in resources:
         errors.append(f"{path.relative_to(ROOT)}: svc-orchestrator is not deployed")
+    if "../../../apps/core/svc-conversations/k8s" not in resources:
+        errors.append(f"{path.relative_to(ROOT)}: svc-conversations is not deployed")
+    if "../../../apps/workers/offer-worker/k8s" not in resources:
+        errors.append(f"{path.relative_to(ROOT)}: offer-worker is not deployed")
 
 messaging_migration = ROOT / "apps/core/svc-tenancy/migrations/002_messaging.sql"
 migration_text = messaging_migration.read_text()
@@ -193,7 +197,7 @@ for relative, required_values in workflow_isolation_contracts.items():
 
 for relative, image in (
     ("apps/core/svc-tenancy/k8s/deployment.yaml", "ghcr.io/munisp/svc-tenancy:0.2.0"),
-    ("apps/core/svc-orchestrator/k8s/deployment.yaml", "ghcr.io/munisp/svc-orchestrator:0.3.0"),
+    ("apps/core/svc-orchestrator/k8s/deployment.yaml", "ghcr.io/munisp/svc-orchestrator:0.4.0"),
     ("apps/workers/campaign-worker/k8s/deployment.yaml", "ghcr.io/munisp/campaign-worker:0.2.0"),
     ("apps/workers/studio-worker/k8s/deployment.yaml", "ghcr.io/munisp/studio-worker:0.2.0"),
     ("apps/workers/synthetic-probe/k8s/deployment.yaml", "ghcr.io/munisp/synthetic-probe:0.1.0"),
@@ -215,7 +219,7 @@ for required in ('("workers", "synthetic-probe")', '("servicemonitor", "syntheti
     if required not in acceptance_preflight:
         errors.append(f"staging preflight is missing {required}")
 
-required_topics = {"usage.events", "message.status", "census.pings", "lead.events", "money.events", "ai.jobs", "audit.publish"}
+required_topics = {"usage.events", "usage.rollups", "message.status", "census.pings", "lead.events", "money.events", "ai.jobs", "audit.publish"}
 text = (ROOT / "bootstrap/platform/kafka-topics.yaml").read_text()
 missing = sorted(topic for topic in required_topics if f"name: {topic}" not in text)
 if missing:
@@ -228,7 +232,11 @@ for path in ROOT.rglob("Dockerfile"):
 
 python_tested_images = [ROOT / f"apps/workers/{worker}/Dockerfile" for worker in
                         ("campaign-worker", "studio-worker", "synthetic-probe")]
-python_tested_images.append(ROOT / "apps/core/svc-orchestrator/Dockerfile")
+python_tested_images.extend([
+    ROOT / "apps/core/svc-orchestrator/Dockerfile",
+    ROOT / "apps/core/svc-conversations/Dockerfile",
+    ROOT / "apps/workers/offer-worker/Dockerfile",
+])
 for dockerfile in python_tested_images:
     text = dockerfile.read_text()
     for required in ("python -m pytest && touch /tests-passed", "COPY --from=test /tests-passed /app/.tests-passed"):
@@ -270,6 +278,8 @@ orchestrator_contracts = {
         'f"studio:{claims.tenant_id}:{body.pack_id}"', '"approver": claims.actor',
         '"reviewer": claims.actor', 'snapshot.get("manifest_sha256") != body.manifest_sha256',
         'await app.state.qa_assets.validate_manifest(', 'response.headers["Cache-Control"] = "no-store"',
+        '"OfferWorkflow", argument, f"offer:{claims.tenant_id}:{body.job_id}", "offers-v1"',
+        'artifact.get("sha256") != body.artifact_sha256', '"reviewer": claims.actor',
     ),
     "assets.py": (
         "hmac.compare_digest(actual_sha256, expected_sha256)", 'ResponseCacheControl": "no-store"',
@@ -290,7 +300,7 @@ for required in ("name: svc-orchestrator", "https://console.volumeos.example.com
         errors.append(f"APISIX orchestrator route/CORS is missing {required}")
 network_policy = (ROOT / "policies/default-deny-networkpolicy.yaml").read_text()
 for required in (
-    "name: allow-edge-core-ingress", "values: [svc-tenancy, svc-orchestrator]",
+    "name: allow-edge-core-ingress", "values: [svc-tenancy, svc-orchestrator, svc-collections, svc-census-sync, svc-query]",
     "name: allow-orchestrator-dependencies", "{protocol: TCP, port: 7233}", "{protocol: TCP, port: 9000}",
 ):
     if required not in network_policy:
@@ -317,7 +327,7 @@ console = ROOT / "apps/console"
 for relative in (
     "package.json", "vite.config.ts", "src/App.tsx",
     "src/lib/api.ts", "src/lib/auth.ts", "src/lib/config.ts", "src/sw.ts",
-    "public/runtime-config.json", "scripts/generate-icons.mjs",
+    "src/sections/OfferOperationsSection.tsx", "public/runtime-config.json", "scripts/generate-icons.mjs",
 ):
     if not (console / relative).is_file():
         errors.append(f"apps/console: missing {relative}")
@@ -338,7 +348,12 @@ console_contracts = {
     "src/lib/auth.ts": (
         "response_type: 'code'", "window.sessionStorage", "automaticSilentRenew: false",
     ),
-    "src/lib/config.ts": ("cache: 'no-store'",),
+    "src/lib/config.ts": ("cache: 'no-store'", "conversationsApiUrl"),
+    "src/sections/OfferOperationsSection.tsx": (
+        "selectedJob.artifact!.sha256", "selectedJob.status !== 'awaiting-review'",
+        "draft.status !== 'approved'", "No preview conversation data is substituted",
+        "The API never accepts a tenant ID from this form",
+    ),
     "vite.config.ts": ("strategies: 'injectManifest'", "globIgnores: ['runtime-config.json']"),
     "src/sw.ts": ("precacheAndRoute(self.__WB_MANIFEST)",),
 }
@@ -357,7 +372,7 @@ for path in (console / "src").rglob("*"):
             if forbidden in text:
                 errors.append(f"{path.relative_to(ROOT)}: forbidden console boundary {forbidden}")
 runtime_config = json.loads((console / "public/runtime-config.json").read_text())
-if any((runtime_config.get("coreApiUrl"), runtime_config.get("orchestratorApiUrl"), runtime_config["oidc"].get("authority"), runtime_config["oidc"].get("clientId"))):
+if any((runtime_config.get("coreApiUrl"), runtime_config.get("orchestratorApiUrl"), runtime_config.get("conversationsApiUrl"), runtime_config["oidc"].get("authority"), runtime_config["oidc"].get("clientId"))):
     errors.append("apps/console: source runtime configuration must not contain deployment endpoints")
 console_package = json.loads((console / "package.json").read_text())
 if console_package.get("scripts", {}).get("prebuild") != "npm run icons":
@@ -366,6 +381,223 @@ icon_generator = (console / "scripts/generate-icons.mjs").read_text()
 for required in ("deflateSync", "crc32", "apple-touch-icon.png", "pwa-192.png", "pwa-512.png", "pwa-maskable-512.png"):
     if required not in icon_generator:
         errors.append(f"apps/console: icon generator is missing {required}")
+
+# M2 source gates: these checks establish wiring and fail-closed contracts only.
+# They are not evidence of a live TigerBeetle, Kafka, Flink, or provider cluster.
+m2_contracts = {
+    "apps/core/svc-billing/k8s/deployment.yaml": (
+        "ghcr.io/munisp/svc-billing:0.1.0", "name: volumeos-money", "path: /health/ready",
+    ),
+    "apps/core/svc-collections/k8s/deployment.yaml": (
+        "ghcr.io/munisp/svc-collections:0.1.0", "name: collection-providers", "name: DATABASE_URL",
+    ),
+    "apps/core/svc-orchestrator/k8s/deployment.yaml": (
+        "ghcr.io/munisp/svc-orchestrator:0.4.0", "name: BILLING_SERVICE_URL",
+        "name: COLLECTIONS_SERVICE_URL", "name: VOLUMEOS_SERVICE_TOKEN",
+    ),
+    "apps/workers/billing-worker/k8s/deployment.yaml": (
+        "value: billing-v1", "name: DATABASE_URL", "name: DUNNING_CHANNELS",
+    ),
+    "apps/workers/campaign-worker/k8s/deployment.yaml": (
+        "name: BILLING_SERVICE_URL", "key: billing-service-url",
+    ),
+    "apps/data/usage-rollup/rollup_job.py": (
+        "CheckpointingMode.EXACTLY_ONCE", "PARTITION BY event_id",
+        "SUM(charge_minor) AS amount_minor", "SUM(cost_minor) AS provider_cost_minor",
+    ),
+    "apps/data/usage-rollup/dispatcher.py": (
+        "group_id=None", "auto_offset_reset=\"earliest\"",
+        "WorkflowIDReusePolicy.REJECT_DUPLICATE", "closed rollup changed after posting",
+    ),
+    "apps/workers/billing-worker/billing_main.py": (
+        "class UsageRollupWorkflow:", "def status(self) -> UsageWeekStatus:",
+        "WeeklyUsagePosting.from_days(self._days)", "parse_usage_posting(response, value)",
+    ),
+}
+for relative, required_values in m2_contracts.items():
+    path = ROOT / relative
+    if not path.is_file():
+        errors.append(f"M2: missing {relative}")
+        continue
+    text = path.read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"{relative}: missing M2 contract {required}")
+for env in ("dev", "stage", "prod"):
+    overlay_text = (ROOT / f"deploy/overlays/{env}/kustomization.yaml").read_text()
+    for resource in ("apps/core/svc-billing/k8s", "apps/core/svc-collections/k8s",
+                     "apps/workers/billing-worker/k8s", "apps/data/usage-rollup/k8s"):
+        if resource not in overlay_text:
+            errors.append(f"{env} overlay is missing {resource}")
+for required in ("paths: [/v1/collections/webhooks/*]", "/v1/billing/*", "name: volumeos-money"):
+    if required not in platform_config:
+        errors.append(f"M2 gateway/configuration is missing {required}")
+for required in ("name: allow-money-service-ingress", "values: [campaign-worker, billing-worker]",
+                 "name: allow-collection-provider-egress"):
+    if required not in network_policy:
+        errors.append(f"M2 NetworkPolicy is missing {required}")
+
+# M3 source gates: engine ownership, field synchronization, media keys, and
+# tenant-safe serving. These checks do not assert a live analytics cluster.
+m3_required_files = (
+    "apps/data/lakehouse/contracts.py", "apps/data/lakehouse/ingest.py",
+    "apps/data/lakehouse/conform.py", "apps/data/lakehouse/gold.py",
+    "apps/data/lakehouse/catalog.json", "apps/data/lakehouse/jobs/spark_etl.py",
+    "apps/data/streaming/watches.py", "apps/data/geospatial/spatial.py",
+    "apps/data/geospatial/sedona_job.py", "apps/data/ray-jobs/registry.py",
+    "apps/data/ray-jobs/ray_job.py", "apps/core/svc-query/src/query.rs",
+    "apps/core/svc-census-sync/sync.py", "apps/core/svc-census-sync/main.py",
+    "apps/core/svc-census-sync/store.py", "apps/core/svc-census-sync/auth.py",
+    "apps/core/svc-census-sync/fluvio_sink.py",
+    "apps/core/svc-census-sync/migrations/001_census_sync.sql",
+    "apps/data/media-security/envelope.py", "apps/data/media-security/vault.py",
+    "apps/data/report-search/search.py", "apps/data/report-search/main.py",
+    "fluvio/connectors/census-kafka-sink.yaml", "scripts/verify_m3.py",
+)
+for relative in m3_required_files:
+    if not (ROOT / relative).is_file():
+        errors.append(f"M3: missing {relative}")
+
+m3_contracts = {
+    "apps/data/lakehouse/ingest.py": (
+        "self.dedup.contains(self.consumer, envelope.event_id)", "raw_sha256",
+        "Transient storage failures propagate for broker retry",
+    ),
+    "apps/data/lakehouse/conform.py": (
+        "PHONE.sub", "hmac.new(self.masking_key", "scoring_eligible", "Sedona/H3 spatial indexer",
+    ),
+    "apps/data/lakehouse/gold.py": (
+        "PII_COLUMNS.intersection(row)", "quality-approved tenant-scoped", "mode=\"append\"",
+    ),
+    "apps/data/lakehouse/jobs/spark_etl.py": (
+        "TRANSFORMS", "row_number().over(dedup)", "quality_decision", "mode(\"append\")",
+        "ST_AsText(ST_Point", "volumeos_h3_r9", "def maintenance", "Spark/Delta",
+    ),
+    "apps/data/streaming/watches.py": ("event_id", "delivery-sla", "send_rate", "cost-breach"),
+    "apps/data/geospatial/spatial.py": ("latlng_to_cell", "9", "7", "isochrone", "digital_silence"),
+    "apps/data/geospatial/sedona_job.py": ("ST_Contains", "volumeos_h3_r9", "volumeos_h3_r7"),
+    "apps/data/ray-jobs/registry.py": ("hmac", "approved", "model_version", "weight_version"),
+    "apps/data/ray-jobs/ray_job.py": ("ray.remote", "train_and_review_candidate", "score_approved_batch"),
+    "apps/core/svc-query/src/query.rs": (
+        "MAX_ROWS: u32 = 1_000", "MAX_DAYS: i64 = 92", "`tenant_id` = '{tenant_id}'",
+        "approved client-facing gold mart", "SessionContext",
+    ),
+    "apps/core/svc-census-sync/sync.py": (
+        "MAX_CHUNKS = 64", "MAX_UPLOAD_BYTES = 8 * 1024 * 1024", "hmac.compare_digest",
+        "await self.sink.publish", "await self.store.publish", "phone_hash", "del self.chunks",
+    ),
+    "apps/core/svc-census-sync/main.py": (
+        "OIDCAuthenticator", "X-VolumeOS-Device", "claims.device_id != device_id",
+        "claims.can_sync()", "CensusSync",
+    ),
+    "apps/core/svc-census-sync/store.py": (
+        "set_config('volumeos.tenant_id'", "ON CONFLICT DO NOTHING", "DELETE FROM census_chunks",
+    ),
+    "apps/core/svc-census-sync/auth.py": (
+        'header.get("alg") != "RS256"', '"device_id"', "field-agent", "algorithms=[\"RS256\"]",
+    ),
+    "apps/core/svc-census-sync/fluvio_sink.py": ("async_send", "async_wait", "async_flush"),
+    "apps/core/svc-census-sync/migrations/001_census_sync.sql": (
+        "ENABLE ROW LEVEL SECURITY", "FORCE ROW LEVEL SECURITY", "UNIQUE (tenant_id, event_id)",
+    ),
+    "apps/data/media-security/envelope.py": (
+        "AESGCM", "WrappedKey", "wrapped_dek", "def rotate", "self.provider.unwrap", "associated_data",
+    ),
+    "apps/data/media-security/vault.py": ("Vault Transit", "/encrypt/", "/decrypt/", "vault:v"),
+    "apps/data/report-search/search.py": (
+        "tenant_id.keyword", "MAX_DAYS = 92", "source.get(\"tenant_id\") != tenant_id",
+        "authoritative", "volumeos-reports-v1", "volumeos-logs-v1",
+    ),
+    "apps/data/report-search/main.py": ("OIDCAuthenticator", "claims.can(\"reader\")", "ReportSearch"),
+    "fluvio/connectors/census-kafka-sink.yaml": (
+        "version: 0.3.2", "type: kafka-sink", "topic: census.pings", "enable.idempotence: true",
+    ),
+}
+for relative, required_values in m3_contracts.items():
+    path = ROOT / relative
+    if not path.is_file():
+        continue
+    text = path.read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"{relative}: missing M3 contract {required}")
+
+m3_catalog = json.loads((ROOT / "apps/data/lakehouse/catalog.json").read_text())
+m3_tables = {row["name"]: row for row in m3_catalog.get("tables", [])}
+required_m3_tables = {
+    "br_events_usage", "br_events_message", "br_census_pings", "br_scrape_runs", "br_cdc_*",
+    "sl_dim_tenant", "sl_dim_lead", "sl_dim_poi", "sl_fact_message", "sl_fact_usage",
+    "sl_fact_payment", "sl_fact_ai_job", "gt_campaign_perf", "gt_territory_scores", "gt_lga_density",
+    "gt_client_health", "gt_cost_per_client", "gt_revenue_by_offer", "gt_model_registry",
+}
+if set(m3_tables) != required_m3_tables:
+    errors.append("M3 medallion catalog does not exactly cover the reviewed table inventory")
+for name, spec in m3_tables.items():
+    if not spec.get("owner") or not spec.get("required_columns") or not spec.get("partitions"):
+        errors.append(f"M3 catalog table {name} lacks owner, schema, or partitions")
+
+for env in ("dev", "stage", "prod"):
+    overlay_text = (ROOT / f"deploy/overlays/{env}/kustomization.yaml").read_text()
+    for resource in ("apps/core/svc-census-sync/k8s", "apps/core/svc-query/k8s",
+                     "apps/data/lakehouse/k8s", "apps/data/report-search/k8s"):
+        if resource not in overlay_text:
+            errors.append(f"{env} overlay is missing M3 resource {resource}")
+for required in ("/v1/tenants/*/census/*", "/v1/query", "/v1/tenants/*/search/*"):
+    if required not in platform_config:
+        errors.append(f"M3 gateway is missing {required}")
+for required in ("allow-m3-core-data-egress", "allow-report-search-access", "svc-census-sync, svc-query"):
+    if required not in network_policy:
+        errors.append(f"M3 NetworkPolicy is missing {required}")
+
+# Offer operations source gates: signed front-desk intake, consent-gated redacted
+# AI, exact-draft human approval, durable RLS state, and exact-artifact batch review.
+offer_required_files = (
+    "apps/core/svc-conversations/main.py", "apps/core/svc-conversations/conversations.py",
+    "apps/core/svc-conversations/store.py", "apps/core/svc-conversations/providers.py",
+    "apps/core/svc-conversations/migrations/001_conversations.sql",
+    "apps/core/svc-conversations/tests/test_api.py", "apps/core/svc-conversations/tests/test_conversations.py",
+    "apps/workers/offer-worker/worker.py", "apps/workers/offer-worker/front_desk.py",
+    "apps/workers/offer-worker/scorecards.py", "apps/workers/offer-worker/books.py",
+    "apps/workers/offer-worker/compliance.py", "apps/workers/offer-worker/funding.py",
+    "apps/workers/offer-worker/tests/test_offers.py", "apps/workers/offer-worker/tests/test_worker.py",
+)
+for relative in offer_required_files:
+    if not (ROOT / relative).is_file():
+        errors.append(f"offer operations: missing {relative}")
+conversation_contracts = {
+    "apps/core/svc-conversations/conversations.py": (
+        "hmac.compare_digest", 'value["metadata"]["phone_number_id"]',
+        'subject = f"whatsapp:+{recipient}"', '"service-delivery"', '"ai-processing"',
+        "not await self.store.allowed", "draft.digest",
+    ),
+    "apps/core/svc-conversations/store.py": (
+        "class PostgresConversationStore", "set_config('volumeos.tenant_id'",
+        "ON CONFLICT", "outbound_for_draft",
+    ),
+    "apps/core/svc-conversations/providers.py": (
+        'frontdesk:{draft.tenant_id}:{draft.digest}', "PrivacyAIClient", "WhatsAppCloudSender",
+    ),
+    "apps/core/svc-conversations/migrations/001_conversations.sql": (
+        "ENABLE ROW LEVEL SECURITY", "FORCE ROW LEVEL SECURITY",
+        "reject_conversation_evidence_mutation", "conversation_outbound_draft_unique",
+    ),
+    "apps/workers/offer-worker/front_desk.py": (
+        'result.get("confidence")', "redacted AI response must include numeric confidence",
+    ),
+    "apps/workers/offer-worker/worker.py": (
+        'BATCH_OFFERS = {"03", "05", "07", "08"}', 'task_queue="offers-v1"',
+        'required = 2 if job.offer == "08" else 1', "not self.release_complete",
+        '@workflow.query(name="status")',
+    ),
+}
+for relative, required_values in conversation_contracts.items():
+    path = ROOT / relative
+    if not path.is_file():
+        continue
+    text = path.read_text()
+    for required in required_values:
+        if required not in text:
+            errors.append(f"{relative}: missing offer safety contract {required}")
 
 if errors:
     print("\n".join(f"ERROR {e}" for e in errors), file=sys.stderr)

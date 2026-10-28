@@ -6,6 +6,7 @@ or settlement is simulated. Every request carries an idempotency key and tenant 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from onboarding import (
     create_tenancy,
     initialize_listmonk,
     initialize_postiz,
+    provision_billing_accounts,
     provision_identity,
     send_welcome,
 )
@@ -49,6 +51,14 @@ class CampaignInput:
     amount_minor: int
     currency: str = "NGN"
     cycle_id: str = ""
+    offer: str = "01"
+
+    @property
+    def ledger_event_id(self) -> str:
+        digest = hashlib.blake2s(
+            "\x1f".join((self.tenant_id, self.campaign_id, self.cycle_id)).encode(), digest_size=16
+        ).hexdigest()
+        return f"campaign:{digest}"
 
 
 @dataclass(frozen=True)
@@ -91,6 +101,8 @@ def validate_campaign(value: CampaignInput) -> None:
         raise ApplicationError("campaign budget must be positive", non_retryable=True)
     if value.currency not in {"NGN", "USD"}:
         raise ApplicationError("unsupported currency", non_retryable=True)
+    if value.offer not in {f"{number:02}" for number in range(1, 9)}:
+        raise ApplicationError("campaign offer must be one of 01 through 08", non_retryable=True)
     if not value.brief.strip():
         raise ApplicationError("campaign brief is required", non_retryable=True)
 
@@ -100,6 +112,8 @@ async def call(service_env: str, path: str, tenant_id: str, key: str, payload: d
     if not base:
         raise ApplicationError(f"{service_env} is not configured", non_retryable=True)
     headers = {"Idempotency-Key": key, "X-VolumeOS-Tenant": tenant_id}
+    if token := os.environ.get("VOLUMEOS_SERVICE_TOKEN", ""):
+        headers["Authorization"] = f"Bearer {token}"
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         response = await client.post(base + path, json=payload, headers=headers)
         response.raise_for_status()
@@ -126,13 +140,23 @@ async def draft_campaign(value: CampaignInput) -> str:
 async def reserve_budget(value: CampaignInput) -> str:
     activity.heartbeat()
     result = await call(
-        "TB_ADAPTER_URL", "/v1/reservations", value.tenant_id,
-        f"campaign:{value.campaign_id}:reserve",
-        {"campaign_id": value.campaign_id, "amount_minor": value.amount_minor, "currency": value.currency},
+        "BILLING_SERVICE_URL", f"/v1/tenants/{value.tenant_id}/charges/reserve", value.tenant_id,
+        value.ledger_event_id,
+        {
+            "event_id": value.ledger_event_id,
+            "amount_minor": str(value.amount_minor),
+            "currency": value.currency,
+            "kind": "campaign",
+            "offer": value.offer,
+            "channel": "campaign",
+            "timeout_seconds": 900,
+        },
     )
-    if not result.get("reservation_id"):
-        raise ApplicationError("ledger response is missing reservation_id")
-    return str(result["reservation_id"])
+    if result.get("event_id") != value.ledger_event_id or result.get("state") != "pending":
+        raise ApplicationError("ledger response does not match the campaign reservation")
+    if result.get("tenant_id") != value.tenant_id or int(result.get("amount_minor", 0)) != value.amount_minor:
+        raise ApplicationError("ledger response contains different campaign money fields", non_retryable=True)
+    return value.ledger_event_id
 
 
 def parse_dispatch_outcome(value: CampaignInput, result: dict[str, Any]) -> DispatchOutcome:
@@ -193,10 +217,17 @@ def record_campaign_cycle(value: CampaignInput, outcome: DispatchOutcome) -> Non
 async def settle_budget(value: CampaignInput, reservation_id: str, outcome: str) -> None:
     if outcome not in {"post", "void"}:
         raise ApplicationError("settlement must be post or void", non_retryable=True)
-    await call(
-        "TB_ADAPTER_URL", f"/v1/reservations/{reservation_id}/{outcome}", value.tenant_id,
-        f"campaign:{value.campaign_id}:{outcome}", {"campaign_id": value.campaign_id},
+    if reservation_id != value.ledger_event_id:
+        raise ApplicationError("settlement reservation does not belong to this campaign", non_retryable=True)
+    result = await call(
+        "BILLING_SERVICE_URL", f"/v1/tenants/{value.tenant_id}/charges/{reservation_id}/{outcome}", value.tenant_id,
+        f"{reservation_id}:{outcome}", {},
     )
+    if result.get("event_id") != reservation_id or result.get("tenant_id") != value.tenant_id:
+        raise ApplicationError("ledger settlement scope changed", non_retryable=True)
+    expected_state = "posted" if outcome == "post" else "voided"
+    if result.get("state") != expected_state:
+        raise ApplicationError("ledger settlement did not reach the requested state", non_retryable=True)
 
 
 @workflow.defn
@@ -315,8 +346,8 @@ async def main() -> None:
         activities=[
             draft_campaign, reserve_budget, dispatch_campaign, record_campaign_approval,
             record_campaign_cycle, settle_budget,
-            provision_identity, create_tenancy, initialize_listmonk, initialize_postiz,
-            activate_tenancy, send_welcome, compensate_onboarding,
+            provision_identity, create_tenancy, provision_billing_accounts,
+            initialize_listmonk, initialize_postiz, activate_tenancy, send_welcome, compensate_onboarding,
         ],
     )
     await worker.run()

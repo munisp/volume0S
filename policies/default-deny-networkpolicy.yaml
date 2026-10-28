@@ -63,7 +63,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [svc-tenancy, svc-orchestrator]
+        values: [svc-tenancy, svc-orchestrator, svc-collections, svc-census-sync, svc-query]
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -89,3 +89,172 @@ spec:
         - namespaceSelector:
             matchLabels: {kubernetes.io/metadata.name: data}
       ports: [{protocol: TCP, port: 9000}]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-money-service-ingress
+  namespace: core
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: svc-billing}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: core}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: svc-orchestrator}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: workers}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [campaign-worker, billing-worker]
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-orchestrator-collection-ingress
+  namespace: core
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: svc-collections}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: core}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: svc-orchestrator}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-orchestrator-money-egress
+  namespace: core
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: svc-orchestrator}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [svc-billing, svc-collections, svc-documents]
+      ports: [{protocol: TCP, port: 80}, {protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-money-ledger-egress
+  namespace: core
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [svc-billing, svc-collections]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: data}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: tigerbeetle}
+      ports: [{protocol: TCP, port: 3000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-collection-provider-egress
+  namespace: core
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [svc-collections, svc-documents]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports: [{protocol: TCP, port: 443}]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-document-service-ingress
+  namespace: core
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: svc-documents}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: core}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: svc-orchestrator}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: workers}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: billing-worker}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-m3-core-data-egress
+  namespace: core
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [svc-census-sync, svc-query]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: data}
+      ports: [{protocol: TCP, port: 9000}, {protocol: TCP, port: 9003}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: report-search-default-deny
+  namespace: data
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: report-search}}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-report-search-access
+  namespace: data
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: report-search}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: edge}
+      ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: sec}
+      ports: [{protocol: TCP, port: 8080}]
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: opensearch}
+      ports: [{protocol: TCP, port: 9200}]

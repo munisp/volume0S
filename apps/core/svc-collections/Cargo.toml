@@ -1,0 +1,32 @@
+[package]
+name = "volumeos-svc-collections"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "Tenant-scoped signed collection ingress and TigerBeetle settlement API"
+
+[lib]
+name = "volumeos_svc_collections"
+path = "src/lib.rs"
+
+[dependencies]
+volumeos-tb-adapter = { path = "../../../libs-rust/tb-adapter" }
+volumeos-collection-adapters = { path = "../../../libs-rust/collection-adapters" }
+async-trait = "=0.1.83"
+axum = { version = "=0.7.9", features = ["macros"] }
+constant_time_eq = "=0.3.1"
+cpufeatures = "=0.2.17"
+home = "=0.5.9"
+serde = { version = "=1.0.214", features = ["derive"] }
+serde_json = "=1.0.132"
+sqlx = { version = "=0.8.2", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+tokio = { version = "=1.41.1", features = ["macros", "rt-multi-thread", "signal"] }
+
+[dev-dependencies]
+futures = "=0.3.31"
+hmac = "=0.12.1"
+hex = "=0.4.3"
+http-body-util = "=0.1.2"
+sha2 = "=0.10.8"
+tower = { version = "=0.5.1", features = ["util"] }

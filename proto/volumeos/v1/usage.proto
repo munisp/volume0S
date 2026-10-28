@@ -16,4 +16,9 @@ message UsageEvent {
   uint64 cost_minor = 6;
   string currency = 7;
   DeliveryStatus status = 8;
+  // Explicit customer charge per event; never inferred from provider cost.
+  uint64 charge_minor = 9;
+  // Stable provider and offer attribution for payable postings and showback.
+  string provider = 10;
+  string offer = 11;
 }

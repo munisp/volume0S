@@ -4,8 +4,21 @@ resources:
   - ../../../apps/core/svc-tenancy/k8s
   - ../../../apps/core/svc-provisioning/k8s
   - ../../../apps/core/svc-orchestrator/k8s
+  - ../../../apps/core/svc-privacy/k8s
+  - ../../../apps/core/svc-leads/k8s
+  - ../../../apps/core/svc-conversations/k8s
+  - ../../../apps/core/svc-census-sync/k8s
+  - ../../../apps/core/svc-query/k8s
+  - ../../../apps/core/svc-billing/k8s
+  - ../../../apps/core/svc-collections/k8s
+  - ../../../apps/core/svc-documents/k8s
+  - ../../../apps/workers/billing-worker/k8s
+  - ../../../apps/data/usage-rollup/k8s
+  - ../../../apps/data/lakehouse/k8s
+  - ../../../apps/data/report-search/k8s
   - ../../../apps/workers/campaign-worker/k8s
   - ../../../apps/workers/studio-worker/k8s
+  - ../../../apps/workers/offer-worker/k8s
   - ../../../policies
 labels:
   - includeSelectors: true

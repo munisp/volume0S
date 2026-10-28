@@ -1,0 +1,29 @@
+name: FieldApp
+options:
+  bundleIdPrefix: os.volume
+  deploymentTarget: {iOS: "16.0"}
+packages:
+  SQLCipher: {url: https://github.com/sqlcipher/SQLCipher.swift, from: 4.6.1}
+targets:
+  FieldApp:
+    type: application
+    platform: iOS
+    sources: [FieldApp]
+    dependencies: [{package: SQLCipher}]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: os.volume.field
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: FieldApp/Info.plist
+      properties:
+        CFBundleDisplayName: VolumeOS Field
+        NSLocationWhenInUseUsageDescription: Capture an accurate, consented business location for tenant field census.
+        NSLocationTemporaryUsageDescriptionDictionary: {PreciseLocationPurpose: Verify the consented census geotag.}
+  FieldAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [FieldAppTests]
+    dependencies: [{target: FieldApp}]

@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: billing-worker
+  namespace: workers
+  labels: {app.kubernetes.io/name: billing-worker, app.kubernetes.io/part-of: volumeos}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-worker
+  namespace: workers
+  labels: {app.kubernetes.io/name: billing-worker, app.kubernetes.io/part-of: volumeos}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app.kubernetes.io/name: billing-worker}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: billing-worker, app.kubernetes.io/part-of: volumeos}
+    spec:
+      serviceAccountName: billing-worker
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: worker
+          image: ghcr.io/munisp/billing-worker:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: TEMPORAL_HOSTPORT, value: temporal-frontend.ops.svc.cluster.local:7233}
+            - {name: TEMPORAL_NAMESPACE, value: volumeos}
+            - {name: TEMPORAL_TASK_QUEUE, value: billing-v1}
+            - name: BILLING_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: billing-worker, key: billing-service-url}}
+            - name: TENANCY_URL
+              valueFrom: {configMapKeyRef: {name: billing-worker, key: tenancy-url}}
+            - name: MESSAGING_URL
+              valueFrom: {configMapKeyRef: {name: billing-worker, key: messaging-url}}
+            - name: DOCUMENT_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: billing-worker, key: document-service-url}}
+            - name: DUNNING_CHANNELS
+              valueFrom: {configMapKeyRef: {name: billing-worker, key: dunning-channels}}
+            - name: VOLUMEOS_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: billing-worker, key: service-token}}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: billing-worker, key: database-url}}
+          resources: {requests: {cpu: 200m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]

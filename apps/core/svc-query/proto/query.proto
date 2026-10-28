@@ -1,0 +1,19 @@
+syntax = "proto3";
+package volumeos.query.v1;
+
+service GoldQuery {
+  rpc Query(QueryRequest) returns (QueryResponse);
+}
+
+message QueryRequest {
+  string table = 1;
+  repeated string columns = 2;
+  string start_date = 3;
+  string end_date = 4;
+  uint32 limit = 5;
+}
+
+message QueryResponse {
+  string rows_json = 1;
+  uint32 row_count = 2;
+}

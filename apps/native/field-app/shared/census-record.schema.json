@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VolumeOS native encrypted-outbox envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "tenant_id", "device_id", "consent_reference", "lawful_basis", "latitude", "longitude", "accuracy_m", "captured_at_unix", "document_base64"],
+  "properties": {
+    "event_id": {"type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"},
+    "tenant_id": {"$ref": "#/$defs/id"}, "device_id": {"$ref": "#/$defs/id"}, "consent_reference": {"$ref": "#/$defs/id"},
+    "lawful_basis": {"enum": ["consent", "contract", "legal_obligation", "legitimate_interest"]},
+    "latitude": {"type": "number", "minimum": -90, "maximum": 90}, "longitude": {"type": "number", "minimum": -180, "maximum": 180},
+    "accuracy_m": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    "captured_at_unix": {"type": "integer", "minimum": 1, "maximum": 4102444800},
+    "document_base64": {"type": "string", "contentEncoding": "base64"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"}}
+}

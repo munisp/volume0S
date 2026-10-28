@@ -223,3 +223,44 @@ def test_studio_review_revalidates_objects_and_records_oidc_reviewer(services):
     assert workflows.signals == [(workflow_id, "review", {
         "decision": "approve", "reason": "", "reviewer": "operator-1", "manifest_sha256": "a" * 64,
     })]
+
+
+def offer_snapshot(status="awaiting-review"):
+    return {"tenant_id": "tenant-a", "job_id": "job-1", "offer": "08", "amount_minor": 50000,
+            "currency": "NGN", "status": status, "approval_count": 0,
+            "artifact": {"sha256": "d" * 64, "status": "draft"},
+            "started_at": "2026-10-28T00:00:00Z", "updated_at": "2026-10-28T00:00:00Z"}
+
+
+def test_offer_job_start_and_queue_are_tenant_scoped(services):
+    client, workflows, _ = services
+    workflows.snapshots["offer:tenant-a:job-1"] = offer_snapshot()
+    body = {"job_id": "job-1", "offer": "08", "amount_minor": 50000, "currency": "NGN",
+            "payload": {"cost_estimate_minor": 100, "job_ceiling_minor": 1000, "kind": "memo"}}
+    response = client.post("/v1/offers/jobs", headers=auth(), json=body)
+    assert response.status_code == 202
+    workflow_type, argument, workflow_id, queue = workflows.started[0]
+    assert workflow_type == "OfferWorkflow" and argument["tenant_id"] == "tenant-a"
+    assert workflow_id == "offer:tenant-a:job-1" and queue == "offers-v1"
+    listed = client.get("/v1/offers/jobs", headers=auth())
+    assert listed.status_code == 200 and listed.json()["jobs"][0]["job_id"] == "job-1"
+    assert client.post("/v1/offers/jobs", headers=auth(), json=body | {"tenant_id": "tenant-b"}).status_code == 400
+
+
+def test_offer_review_binds_current_artifact_and_oidc_reviewer(services):
+    client, workflows, _ = services
+    workflow_id = "offer:tenant-a:job-1"
+    workflows.snapshots[workflow_id] = offer_snapshot()
+    stale = client.post("/v1/offers/jobs/job-1/review", headers=auth(),
+                        json={"decision": "approved", "reason": "checked", "artifact_sha256": "e" * 64})
+    assert stale.status_code == 409 and workflows.signals == []
+    response = client.post("/v1/offers/jobs/job-1/review", headers=auth(),
+                           json={"decision": "approved", "reason": "checked", "artifact_sha256": "d" * 64})
+    assert response.status_code == 202
+    signal = workflows.signals[0]
+    assert signal[:2] == (workflow_id, "review")
+    assert signal[2]["reviewer"] == "operator-1" and signal[2]["artifact_sha256"] == "d" * 64
+    assert signal[2]["reviewed_at_unix"] > 0
+    workflows.snapshots[workflow_id] = offer_snapshot("released")
+    assert client.post("/v1/offers/jobs/job-1/review", headers=auth(),
+                       json={"decision": "approved", "reason": "checked", "artifact_sha256": "d" * 64}).status_code == 409

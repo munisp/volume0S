@@ -1,7 +1,8 @@
 """M1 onboarding saga. Every side effect uses a real configured HTTP endpoint.
 
-TigerBeetle account provisioning is intentionally not called before M2. The saga
-activates a tenant only after identity, tenancy, ListMonk, and Postiz succeed.
+TigerBeetle account provisioning is an append-only saga step. The saga activates
+a tenant only after identity, tenancy, ledger accounts, and required channel
+providers succeed.
 """
 from __future__ import annotations
 
@@ -52,7 +53,7 @@ def validate_onboarding(value: OnboardingInput) -> None:
 
 
 def saga_compensations(completed: list[str]) -> list[str]:
-    order = ["identity", "tenancy", "listmonk", "postiz", "active", "welcome"]
+    order = ["identity", "tenancy", "billing", "listmonk", "postiz", "active", "welcome"]
     if any(step not in order for step in completed):
         raise ValueError("unknown saga step")
     # Postiz validation is read-only: the customer-owned OAuth integration must
@@ -124,6 +125,21 @@ async def create_tenancy(value: OnboardingInput) -> int:
 
 
 @activity.defn
+async def provision_billing_accounts(value: OnboardingInput) -> int:
+    """Provision canonical NGN/USD accounts before any service can be activated."""
+    activity.heartbeat()
+    result = await request(
+        "BILLING_SERVICE_URL", "POST", f"/v1/tenants/{value.tenant_id}/accounts", value.tenant_id,
+        f"onboarding:{value.tenant_id}:billing",
+        {"currencies": ["NGN", "USD"], "offers": value.offers},
+    )
+    count = result.get("accounts_provisioned")
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        raise ApplicationError("billing service did not confirm account provisioning", non_retryable=True)
+    return count
+
+
+@activity.defn
 async def initialize_listmonk(value: OnboardingInput) -> str:
     return await provision(value, "listmonk", "LISTMONK_ADMIN_URL", "/api/lists", {
         "name": f"volumeos-{value.tenant_id}", "type": "private", "optin": "double",
@@ -190,6 +206,8 @@ class OnboardingWorkflow:
             version = await workflow.execute_activity(create_tenancy, value, **options)
             resources["tenancy"] = str(version)
             completed.append("tenancy")
+            await workflow.execute_activity(provision_billing_accounts, value, **options)
+            completed.append("billing")
             if "01" in value.offers:
                 resources["listmonk"] = await workflow.execute_activity(initialize_listmonk, value, **options)
                 completed.append("listmonk")

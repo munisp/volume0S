@@ -24,6 +24,7 @@ spec:
           - {name: gold, policy: none, purge: false, versioning: true}
           - {name: assets, policy: none, purge: false}
           - {name: archive, policy: none, purge: false}
+          - {name: finance-archive, policy: none, purge: false, versioning: true, objectLock: true}
   destination:
     server: https://kubernetes.default.svc
     namespace: data

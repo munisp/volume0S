@@ -1,0 +1,13 @@
+apiVersion: 0.1.0
+meta:
+  version: 0.3.2
+  name: volumeos-census-kafka-sink
+  type: kafka-sink
+  topic: census.pings
+kafka:
+  url: kafka-kafka-bootstrap.data.svc.cluster.local:9092
+  topic: census.pings
+  create-topic: false
+  options:
+    request.required.acks: all
+    enable.idempotence: true

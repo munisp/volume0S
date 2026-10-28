@@ -33,6 +33,9 @@ class DispatchRequest:
     recipient: str | None = None
     scheduled_at: datetime | None = None
     postiz_integration_id: str | None = None
+    # Customer rating is explicit and remains separate from provider cost.
+    unit_charge_minor: int = 0
+    offer: str = "01"
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,9 @@ class UsageEvent:
     cost_minor: int
     currency: str
     status: str
+    charge_minor: int = 0
+    provider: str = ""
+    offer: str = "01"
 
 
 class DispatchPolicy(Protocol):
@@ -78,6 +84,10 @@ def validate_dispatch(value: DispatchRequest) -> None:
         raise ApplicationError("valid campaign_id and approval_id are required", non_retryable=True)
     if value.channel not in {"email", "social"}:
         raise ApplicationError("unsupported M1 provider channel", non_retryable=True)
+    if value.unit_charge_minor < 0:
+        raise ApplicationError("unit charge cannot be negative", non_retryable=True)
+    if value.offer not in {f"{number:02}" for number in range(1, 9)}:
+        raise ApplicationError("campaign offer must be one of 01 through 08", non_retryable=True)
     if not value.content.strip():
         raise ApplicationError("approved content is required", non_retryable=True)
     if value.channel == "email" and (value.recipient is None or not value.recipient.strip()):
@@ -118,6 +128,7 @@ class GuardedDispatcher:
             event_id=f"dispatch:{key}", tenant_id=value.tenant_id,
             campaign_id=value.campaign_id, channel=value.channel, count=1,
             cost_minor=result.cost_minor, currency=result.currency, status="accepted",
+            charge_minor=value.unit_charge_minor, provider=value.channel, offer=value.offer,
         ))
         return result
 

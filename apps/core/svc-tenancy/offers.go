@@ -40,11 +40,16 @@ var q1Offers = []Offer{
 		{ID: "growth", SetupMinor: 4000000, MonthlyMinor: 5500000, Currency: "NGN", Entitlements: map[string]int{"posts": 16, "platforms": 3, "performance_report": 1}},
 		{ID: "pro", SetupMinor: 7500000, MonthlyMinor: 12000000, Currency: "NGN", Entitlements: map[string]int{"posts": 30, "platforms": 0, "reels": 2, "ad_creative_support": 1, "strategy_call": 1}},
 	}},
+	{ID: "03", Name: "Call Quality Scorecards", Module: "scorecards", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "04", Name: "AI Front Desk", Module: "conversations", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "05", Name: "Books on Autopilot", Module: "books", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
 	{ID: "06", Name: "Shopfront Studio", Module: "studio", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
 		{ID: "starter", PackMinor: 2000000, Currency: "NGN", TurnaroundHours: 48, Entitlements: map[string]int{"images": 5, "studio_white": 1, "lifestyle": 2}},
 		{ID: "growth", PackMinor: 3000000, Currency: "NGN", TurnaroundHours: 48, Entitlements: map[string]int{"images": 7, "studio_white": 1, "lifestyle": 2, "infographic": 1, "before_after": 1}},
 		{ID: "pro", PackMinor: 5500000, Currency: "NGN", TurnaroundHours: 48, Entitlements: map[string]int{"images": 12, "short_video_loops": 1}},
 	}},
+	{ID: "07", Name: "Compliance Watchtower", Module: "compliance", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "08", Name: "Funding Readiness", Module: "funding", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
 }
 
 var q1Bundles = []Bundle{{

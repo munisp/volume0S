@@ -1,0 +1,27 @@
+# Sanitized external-operator example. All hosts are intentionally non-routable.
+domain: volumeos.operator.example.invalid
+oidc:
+  issuer: https://id.operator.example.invalid/realms/volumeos
+  audience: volumeos
+  jwks_url: https://id.operator.example.invalid/realms/volumeos/protocol/openid-connect/certs
+  client_secret: null
+secrets:
+  backend: external-secrets
+  prefix: secret/volumeos/operator
+registry: registry.operator.example.invalid/volumeos
+object_storage:
+  endpoint: https://objects.operator.example.invalid
+  bucket: volumeos-operator
+providers:
+  paystack: {enabled: false, credential_secret: secret/volumeos/operator/paystack}
+  flutterwave: {enabled: false, credential_secret: secret/volumeos/operator/flutterwave}
+  moniepoint: {enabled: false, credential_secret: secret/volumeos/operator/moniepoint}
+  whatsapp: {enabled: false, credential_secret: secret/volumeos/operator/whatsapp}
+  mojaloop: {enabled: false}
+security:
+  wazuh_bootstrap_credentials: false
+  opencti_token_secret: secret/volumeos/operator/opencti
+native:
+  android_package: os.volume.field
+  ios_bundle: os.volume.field
+  oauth_redirect: os.volume.field:/oauth2redirect

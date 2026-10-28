@@ -62,8 +62,27 @@ func TestLaunchBundleAndCatalogIsolation(t *testing.T) {
 		t.Fatal("catalog caller mutated the source price book")
 	}
 	for _, offer := range fresh {
-		if offer.CommercialStatus != "operator-review-required" {
+		if offer.CommercialStatus != "operator-review-required" && offer.CommercialStatus != "source-only-unpriced" {
 			t.Fatalf("unreviewed price book marked active: %+v", offer)
 		}
+		if offer.CommercialStatus == "source-only-unpriced" && len(offer.Tiers) != 0 {
+			t.Fatalf("source-only offer must not invent pricing: %+v", offer)
+		}
+	}
+}
+
+func TestRemainingOffersArePresentWithoutInventedPrices(t *testing.T) {
+	offers, _ := OfferCatalog()
+	seen := map[string]bool{}
+	for _, offer := range offers {
+		if offer.ID == "03" || offer.ID == "04" || offer.ID == "05" || offer.ID == "07" || offer.ID == "08" {
+			seen[offer.ID] = true
+			if offer.CommercialStatus != "source-only-unpriced" || len(offer.Tiers) != 0 {
+				t.Fatalf("remaining offer has an unsupported commercial term: %+v", offer)
+			}
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("remaining offers missing from catalog: %+v", seen)
 	}
 }

@@ -11,7 +11,7 @@ import httpx
 import jwt
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
-READER_ROLES = {"delivery", "sales", "analyst", "client-owner", "partner", "auditor"}
+READER_ROLES = {"delivery", "sales", "analyst", "client-owner", "partner", "auditor", "finance"}
 
 
 class AuthenticationError(Exception):

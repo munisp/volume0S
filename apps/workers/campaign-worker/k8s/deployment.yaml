@@ -37,8 +37,8 @@ spec:
             - {name: TEMPORAL_TASK_QUEUE, value: campaigns-v1}
             - name: AI_GATEWAY_URL
               valueFrom: {configMapKeyRef: {name: campaign-worker, key: ai-gateway-url}}
-            - name: TB_ADAPTER_URL
-              valueFrom: {configMapKeyRef: {name: campaign-worker, key: tb-adapter-url}}
+            - name: BILLING_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: campaign-worker, key: billing-service-url}}
             - name: CAMPAIGN_DISPATCH_URL
               valueFrom: {configMapKeyRef: {name: campaign-worker, key: campaign-dispatch-url}}
             - name: IDENTITY_ADMIN_URL

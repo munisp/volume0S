@@ -1,11 +1,18 @@
 [package]
 name = "volumeos-tb-adapter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
-description = "TigerBeetle two-phase reservation contract and deterministic state machine"
+description = "TigerBeetle account taxonomy, live transport, and idempotent two-phase money postings"
 
 [lib]
 name = "volumeos_tb_adapter"
 path = "src/lib.rs"
+
+[dependencies]
+blake3 = "=1.5.5"
+tigerbeetle = "=0.17.9"
+
+[dev-dependencies]
+futures = "=0.3.31"

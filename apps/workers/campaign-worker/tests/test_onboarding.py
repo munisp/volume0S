@@ -69,3 +69,30 @@ async def test_identity_compensation_tracks_client_ownership(monkeypatch, create
         assert calls[-1] == ("IDENTITY_ADMIN_URL", "DELETE", "/v1/tenants/tenant-1")
     else:
         assert len(calls) == 1
+
+
+async def test_billing_accounts_are_provisioned_before_activation(monkeypatch):
+    captured = {}
+
+    async def fake_request(service_env, method, path, tenant_id, key, payload=None):
+        captured.update(service=service_env, method=method, path=path, tenant=tenant_id, payload=payload)
+        return {"accounts_provisioned": 38}
+
+    monkeypatch.setattr(onboarding, "request", fake_request)
+    monkeypatch.setattr(onboarding.activity, "heartbeat", lambda: None)
+    assert await onboarding.provision_billing_accounts(value()) == 38
+    assert captured == {
+        "service": "BILLING_SERVICE_URL", "method": "POST",
+        "path": "/v1/tenants/tenant-1/accounts", "tenant": "tenant-1",
+        "payload": {"currencies": ["NGN", "USD"], "offers": ["01", "02"]},
+    }
+
+
+async def test_billing_account_provisioning_fails_closed_on_invalid_receipt(monkeypatch):
+    async def fake_request(*_args, **_kwargs):
+        return {"accounts_provisioned": 0}
+
+    monkeypatch.setattr(onboarding, "request", fake_request)
+    monkeypatch.setattr(onboarding.activity, "heartbeat", lambda: None)
+    with pytest.raises(ApplicationError):
+        await onboarding.provision_billing_accounts(value())

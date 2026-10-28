@@ -24,7 +24,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: api
-          image: ghcr.io/munisp/svc-orchestrator:0.3.0
+          image: ghcr.io/munisp/svc-orchestrator:0.4.0
           imagePullPolicy: IfNotPresent
           ports: [{containerPort: 8080, name: http}]
           env:
@@ -39,6 +39,14 @@ spec:
               valueFrom: {configMapKeyRef: {name: volumeos-identity, key: audience}}
             - name: OIDC_JWKS_URL
               valueFrom: {configMapKeyRef: {name: volumeos-identity, key: jwks-url}}
+            - name: BILLING_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-money, key: billing-service-url}}
+            - name: COLLECTIONS_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-money, key: collections-service-url}}
+            - name: DOCUMENT_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-money, key: document-service-url}}
+            - name: VOLUMEOS_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: svc-orchestrator, key: service-token}}
           envFrom:
             - secretRef: {name: svc-orchestrator}
           readinessProbe:

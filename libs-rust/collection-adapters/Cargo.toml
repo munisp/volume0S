@@ -1,0 +1,29 @@
+[package]
+name = "volumeos-collection-adapters"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "Signed Paystack, Flutterwave v4, and Moniepoint collection confirmation adapters"
+
+[lib]
+name = "volumeos_collection_adapters"
+path = "src/lib.rs"
+
+[dependencies]
+volumeos-tb-adapter = { path = "../tb-adapter" }
+base64 = "=0.22.1"
+blake3 = "=1.5.5"
+# Keep the TigerBeetle dependency tree compatible with the pinned Rust 1.82 toolchain.
+cpufeatures = "=0.2.17"
+hex = "=0.4.3"
+hmac = "=0.12.1"
+reqwest = { version = "=0.12.9", default-features = false, features = ["json", "rustls-tls"] }
+rust_decimal = "=1.36.0"
+serde = { version = "=1.0.214", features = ["derive"] }
+serde_json = "=1.0.132"
+sha2 = "=0.10.8"
+
+[dev-dependencies]
+futures = "=0.3.31"
+tokio = { version = "=1.41.1", features = ["macros", "rt-multi-thread"] }

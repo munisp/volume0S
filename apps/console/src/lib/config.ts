@@ -1,6 +1,7 @@
 export type RuntimeConfig = {
   coreApiUrl: string
   orchestratorApiUrl: string
+  conversationsApiUrl: string
   oidc: {
     authority: string
     clientId: string
@@ -11,6 +12,7 @@ export type RuntimeConfig = {
 export const defaultConfig: RuntimeConfig = {
   coreApiUrl: '',
   orchestratorApiUrl: '',
+  conversationsApiUrl: '',
   oidc: { authority: '', clientId: '', scope: 'openid profile email' },
 }
 
@@ -22,6 +24,7 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
     return {
       coreApiUrl: cleanUrl(value.coreApiUrl),
       orchestratorApiUrl: cleanUrl(value.orchestratorApiUrl),
+      conversationsApiUrl: cleanUrl(value.conversationsApiUrl),
       oidc: {
         authority: cleanUrl(value.oidc?.authority),
         clientId: value.oidc?.clientId?.trim() ?? '',

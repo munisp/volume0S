@@ -94,3 +94,41 @@ def test_campaign_signal_accepts_only_current_awaiting_approval_state(monkeypatc
 
     assert instance._approval == campaign.Approval("approval-1", "reviewer-1")
     assert instance._status == "approved"
+
+
+async def test_campaign_uses_current_tenant_scoped_ledger_contract(monkeypatch):
+    value = CampaignInput("tenant-a", "campaign-a", "Launch", 12500, cycle_id="cycle-1")
+    calls = []
+
+    async def fake_call(service, path, tenant, key, payload):
+        calls.append((service, path, tenant, key, payload))
+        state = "posted" if path.endswith("/post") else "voided" if path.endswith("/void") else "pending"
+        return {
+            "event_id": value.ledger_event_id,
+            "tenant_id": tenant,
+            "transfer_id": "123",
+            "amount_minor": str(value.amount_minor),
+            "state": state,
+        }
+
+    monkeypatch.setattr(campaign, "call", fake_call)
+    monkeypatch.setattr(campaign.activity, "heartbeat", lambda: None)
+    reservation = await campaign.reserve_budget(value)
+    assert reservation == value.ledger_event_id
+    assert len(reservation) <= 128
+    assert calls[0][1] == "/v1/tenants/tenant-a/charges/reserve"
+    assert calls[0][4]["kind"] == "campaign"
+    assert calls[0][4]["amount_minor"] == "12500"
+    await campaign.settle_budget(value, reservation, "post")
+    assert calls[1][1].endswith(f"/charges/{reservation}/post")
+
+
+async def test_campaign_settlement_rejects_wrong_reservation(monkeypatch):
+    value = CampaignInput("tenant-a", "campaign-a", "Launch", 12500, cycle_id="cycle-1")
+
+    async def unexpected(*_args):
+        raise AssertionError("ledger must not be called for a mismatched reservation")
+
+    monkeypatch.setattr(campaign, "call", unexpected)
+    with pytest.raises(ApplicationError):
+        await campaign.settle_budget(value, "campaign:other", "post")

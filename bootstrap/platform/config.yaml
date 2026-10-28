@@ -24,17 +24,42 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: volumeos-money
+  namespace: core
+data:
+  # The private environment overlay must point at the provisioned TigerBeetle cluster.
+  tigerbeetle-cluster-id: "0"
+  tigerbeetle-addresses: tigerbeetle.data.svc.cluster.local:3000
+  billing-service-url: http://svc-billing.core.svc.cluster.local
+  collections-service-url: http://svc-collections.core.svc.cluster.local
+  document-service-url: http://svc-documents.core.svc.cluster.local
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: campaign-worker
   namespace: workers
 data:
   ai-gateway-url: http://svc-ai-gateway.core.svc.cluster.local
-  tb-adapter-url: http://tb-adapter.core.svc.cluster.local
+  billing-service-url: http://svc-billing.core.svc.cluster.local
   campaign-dispatch-url: http://svc-campaigns.core.svc.cluster.local
   identity-admin-url: http://svc-provisioning.core.svc.cluster.local
   tenancy-url: http://svc-tenancy.core.svc.cluster.local
   listmonk-admin-url: http://listmonk.core.svc.cluster.local
   postiz-provisioner-url: http://svc-provisioning.core.svc.cluster.local
   messaging-url: http://svc-campaigns.core.svc.cluster.local
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: billing-worker
+  namespace: workers
+data:
+  billing-service-url: http://svc-billing.core.svc.cluster.local
+  tenancy-url: http://svc-tenancy.core.svc.cluster.local
+  messaging-url: http://svc-campaigns.core.svc.cluster.local
+  document-service-url: http://svc-documents.core.svc.cluster.local
+  dunning-channels: whatsapp,sms
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -82,7 +107,7 @@ spec:
     - name: orchestrator
       match:
         hosts: [api.volumeos.example.com]
-        paths: [/v1/campaigns, /v1/campaigns/*, /v1/studio/packs, /v1/studio/packs/*]
+        paths: [/v1/campaigns, /v1/campaigns/*, /v1/studio/packs, /v1/studio/packs/*, /v1/billing, /v1/billing/*]
       upstreams:
         - name: svc-orchestrator
       plugins:
@@ -106,3 +131,91 @@ spec:
   loadbalancer: {type: roundrobin}
   nodes:
     - {host: svc-orchestrator.core.svc.cluster.local, port: 80, weight: 100}
+
+---
+# Public ingress is limited to provider-signed webhooks. Checkout, receipt,
+# balance, and ledger administration remain on authenticated internal APIs.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: svc-collections-webhooks
+  namespace: core
+spec:
+  http:
+    - name: collection-webhooks
+      match:
+        hosts: [api.volumeos.example.com]
+        paths: [/v1/collections/webhooks/*]
+      upstreams:
+        - name: svc-collections
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixUpstream
+metadata:
+  name: svc-collections
+  namespace: core
+spec:
+  scheme: http
+  loadbalancer: {type: roundrobin}
+  nodes:
+    - {host: svc-collections.core.svc.cluster.local, port: 80, weight: 100}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: usage-rollup
+  namespace: data
+data:
+  kafka-bootstrap-servers: kafka-kafka-bootstrap.data.svc.cluster.local:9092
+  usage-topic: usage.events
+  rollup-topic: usage.rollups
+  # Late events may revise an open rollup; no ledger posting occurs before close.
+  close-delay-hours: "48"
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: volumeos-m3-apis
+  namespace: core
+spec:
+  http:
+    - name: census-sync
+      match:
+        hosts: [api.volumeos.example.com]
+        paths: [/v1/tenants/*/census/*]
+      upstreams: [{name: svc-census-sync}]
+    - name: gold-query
+      match:
+        hosts: [api.volumeos.example.com]
+        paths: [/v1/query]
+      upstreams: [{name: svc-query}]
+    - name: report-search
+      match:
+        hosts: [api.volumeos.example.com]
+        paths: [/v1/tenants/*/search/*]
+      upstreams: [{name: report-search}]
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixUpstream
+metadata: {name: svc-census-sync, namespace: core}
+spec:
+  scheme: http
+  loadbalancer: {type: roundrobin}
+  nodes: [{host: svc-census-sync.core.svc.cluster.local, port: 80, weight: 100}]
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixUpstream
+metadata: {name: svc-query, namespace: core}
+spec:
+  scheme: http
+  loadbalancer: {type: roundrobin}
+  nodes: [{host: svc-query.core.svc.cluster.local, port: 80, weight: 100}]
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixUpstream
+metadata: {name: report-search, namespace: core}
+spec:
+  scheme: http
+  loadbalancer: {type: roundrobin}
+  nodes: [{host: report-search.data.svc.cluster.local, port: 80, weight: 100}]

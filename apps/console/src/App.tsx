@@ -5,7 +5,7 @@ import {
   CircleAlert, Clock3, CloudOff, Download, FileCheck2, Image as ImageIcon,
   LayoutDashboard, Loader2, LockKeyhole, LogIn, LogOut, PackageCheck, Plus,
   RefreshCw, Rocket, Send, Settings, ShieldCheck, ShoppingBag, Store,
-  UserRoundCheck, Wifi, X, type LucideIcon,
+  UserRoundCheck, WalletCards, Wifi, X, type LucideIcon,
 } from 'lucide-react'
 import { VolumeOSApi, ApiError } from './lib/api'
 import { VolumeOSAuth } from './lib/auth'
@@ -13,12 +13,15 @@ import { defaultConfig, loadRuntimeConfig, oidcConfigured, type RuntimeConfig } 
 import { previewBundles, previewCampaigns, previewOffers, previewPacks, previewTenant } from './lib/demo'
 import type { Bundle, Campaign, Offer, PageId, StudioAsset, StudioPack, Tenant } from './lib/types'
 import { usePwa } from './hooks/usePwa'
+import { BillingSection } from './sections/BillingSection'
+import { OfferOperationsSection } from './sections/OfferOperationsSection'
 
 const navigation: { id: PageId; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'onboarding', label: 'Onboarding', icon: UserRoundCheck },
   { id: 'campaigns', label: 'Campaigns', icon: Send },
   { id: 'studio', label: 'Studio QA', icon: ImageIcon },
+  { id: 'billing', label: 'Money & billing', icon: WalletCards },
   { id: 'offers', label: 'Offers', icon: ShoppingBag },
 ]
 
@@ -73,6 +76,7 @@ function App() {
     config.coreApiUrl,
     config.orchestratorApiUrl,
     () => auth?.accessToken() ?? Promise.resolve(null),
+    config.conversationsApiUrl,
   ), [config, auth])
 
   const tenant = liveTenant ?? (!user ? previewTenant : null)
@@ -145,7 +149,7 @@ function App() {
           setCampaigns([])
           setPacks([])
         }
-        const client = new VolumeOSApi(runtime.coreApiUrl, runtime.orchestratorApiUrl, () => identity.accessToken())
+        const client = new VolumeOSApi(runtime.coreApiUrl, runtime.orchestratorApiUrl, () => identity.accessToken(), runtime.conversationsApiUrl)
         if (runtime.coreApiUrl) {
           try {
             const catalog = await client.offers()
@@ -378,14 +382,14 @@ function App() {
       <aside className="side-rail">
         <button className="brand" onClick={() => navigate('overview')} aria-label="VolumeOS overview">
           <Logo />
-          <span><strong>VolumeOS</strong><small>M1 operations</small></span>
+          <span><strong>VolumeOS</strong><small>Operations console</small></span>
         </button>
         <nav className="desktop-nav" aria-label="Primary navigation">
           <p className="nav-label">Workspace</p>
           {navigation.map(item => <NavButton key={item.id} item={item} active={page === item.id} onClick={() => navigate(item.id)} />)}
         </nav>
         <div className="rail-bottom">
-          <div className="m1-scope"><span className="live-dot" /> M1 delivery scope<small>Onboarding · Cadence · Studio</small></div>
+          <div className="m1-scope"><span className="live-dot" /> Human-gated delivery<small>Onboarding · Cadence · Studio · Offers</small></div>
           <NavButton item={{ id: 'settings', label: 'Settings & safety', icon: Settings }} active={page === 'settings'} onClick={() => navigate('settings')} />
         </div>
       </aside>
@@ -417,7 +421,7 @@ function App() {
         {!authenticated && (
           <div className="preview-banner" role="status">
             <CircleAlert size={18} />
-            <div><strong>Explore the M1 console safely.</strong><span>Names, queues, and statuses below are illustrative preview data. No provider call or business mutation is possible until you connect and sign in.</span></div>
+            <div><strong>Explore the VolumeOS console safely.</strong><span>Names, queues, and statuses below are illustrative preview data. No provider call or business mutation is possible until you connect and sign in.</span></div>
             <button onClick={() => navigate('settings')}>View connection setup <ArrowRight size={15} /></button>
           </div>
         )}
@@ -426,7 +430,8 @@ function App() {
         {page === 'onboarding' && <Onboarding tenant={tenant} connected={tenantConnected} canCreateTenant={authenticated} busy={busy} onModal={setModal} />}
         {page === 'campaigns' && <Campaigns campaigns={campaigns} selected={selectedCampaign} onSelect={setSelectedCampaign} connected={workflowFeedReady} busy={busy || feedsLoading} loading={feedsLoading} feedError={feedsError} onRefresh={refreshWorkflows} onNew={() => setModal('campaign')} onApprove={approveCampaign} />}
         {page === 'studio' && <Studio packs={packs} selected={selectedPack} onSelect={setSelectedPack} connected={workflowFeedReady} busy={busy || feedsLoading} loading={feedsLoading} feedError={feedsError} onRefresh={refreshWorkflows} onNew={() => setModal('pack')} onReview={reviewPack} qaAssets={qaAssets} qaLoading={qaLoading} qaError={qaError} qaImageError={qaImageError} qaManifestReady={qaManifestReady} qaReviewReady={qaReviewReady} onQaLoad={id => setLoadedQaAssets(current => ({ ...current, [id]: true }))} onQaError={() => setQaImageError('One or more QA images could not be loaded. Approval is disabled; refresh the signed asset URLs or reject the pack.')} onQaRefresh={() => setQaReloadToken(current => current + 1)} />}
-        {page === 'offers' && <Offers offers={offers} bundles={bundles} live={offersLive} connected={tenantConnected} onSubscribe={(offer, tier) => { setSelectedOffer({ offer, tier }); setModal('subscription') }} />}
+        {page === 'billing' && <BillingSection api={api} connected={tenantConnected && api.orchestratorConfigured} platform={liveTenant?.id === 'platform'} />}
+        {page === 'offers' && <><Offers offers={offers} bundles={bundles} live={offersLive} connected={tenantConnected} onSubscribe={(offer, tier) => { setSelectedOffer({ offer, tier }); setModal('subscription') }} /><OfferOperationsSection api={api} connected={tenantConnected && api.orchestratorConfigured} conversationsConnected={tenantConnected && api.conversationsConfigured} notify={(kind, message) => setToast({ kind, message })} /></>}
         {page === 'settings' && <SettingsPage config={config} user={user} tenant={tenant} connected={tenantConnected} pwa={pwa} busy={busy} onInstall={install} onSignIn={signIn} onSignOut={signOut} onModal={setModal} />}
       </main>
 
@@ -533,8 +538,8 @@ function Studio({ packs, selected, onSelect, connected, busy, loading, feedError
 
 function Offers({ offers, bundles, live, connected, onSubscribe }: { offers: Offer[]; bundles: Bundle[]; live: boolean; connected: boolean; onSubscribe: (offer: string, tier: string) => void }) {
   const [tiers, setTiers] = useState<Record<string, string>>({})
-  return <div className="page"><PageHeading kicker="Commercial catalog" title="A clear offer. A reviewed price." copy="M1 carries the supplied Q1 founding rates as reference data. An operator must activate a dated price book before quotes or billing; no M2 ledger posting is created here." actions={<span className={`status-badge ${live ? 'status-active' : 'status-warning'}`}>{live ? <Wifi size={14} /> : <Clock3 size={14} />}{live ? 'Live Core catalog' : 'Reference data'}</span>} />
-    <section className="offer-list">{offers.map(offer => { const tierId = tiers[offer.id] ?? offer.tiers[0]?.id; const tier = offer.tiers.find(item => item.id === tierId) ?? offer.tiers[0]; if (!tier) return null; return <article className="offer-row" key={offer.id}><div className="offer-identity"><span className="offer-number">{offer.id}</span><div><h2>{offer.name}</h2><p>{offer.module}</p></div></div><div className="tier-tabs" role="group" aria-label={`${offer.name} tiers`}>{offer.tiers.map(item => <button key={item.id} className={item.id === tier.id ? 'active' : ''} onClick={() => setTiers(current => ({ ...current, [offer.id]: item.id }))}>{item.id}</button>)}</div><div className="offer-price"><span>{tier.pack_minor ? 'Per pack' : 'Monthly reference'}</span><strong>{money(tier.pack_minor ?? tier.monthly_minor, tier.currency)}</strong>{!tier.pack_minor && <small>Setup {money(tier.setup_minor, tier.currency)}</small>}{tier.turnaround_hours && <small>{tier.turnaround_hours}-hour turnaround</small>}</div><div className="entitlements">{Object.entries(tier.entitlements).slice(0, 4).map(([key, value]) => <span key={key}><Check size={14} /> {value === 0 ? 'Unlimited' : value} {titleCase(key)}</span>)}</div><button className="button button-secondary" onClick={() => onSubscribe(offer.id, tier.id)} disabled={!connected}>Choose {tier.id}</button></article>})}</section>
+  return <div className="page"><PageHeading kicker="Commercial catalog" title="A clear offer. A reviewed price." copy="The catalog carries supplied Q1 founding rates only for Offers 01, 02, and 06. Remaining source lines are explicitly unpriced; no subscription or ledger posting is created here." actions={<span className={`status-badge ${live ? 'status-active' : 'status-warning'}`}>{live ? <Wifi size={14} /> : <Clock3 size={14} />}{live ? 'Live Core catalog' : 'Reference data'}</span>} />
+    <section className="offer-list">{offers.map(offer => { const tierId = tiers[offer.id] ?? offer.tiers[0]?.id; const tier = offer.tiers.find(item => item.id === tierId) ?? offer.tiers[0]; if (!tier) return <article className="offer-row" key={offer.id}><div className="offer-identity"><span className="offer-number">{offer.id}</span><div><h2>{offer.name}</h2><p>{offer.module}</p></div></div><div className="offer-price"><span>Source implementation</span><strong>Unpriced</strong><small>Commercial terms require operator review</small></div><div className="entitlements"><span><Check size={14} /> No subscription or charge can be created</span></div><button className="button button-secondary" disabled>Pricing not set</button></article>; return <article className="offer-row" key={offer.id}><div className="offer-identity"><span className="offer-number">{offer.id}</span><div><h2>{offer.name}</h2><p>{offer.module}</p></div></div><div className="tier-tabs" role="group" aria-label={`${offer.name} tiers`}>{offer.tiers.map(item => <button key={item.id} className={item.id === tier.id ? 'active' : ''} onClick={() => setTiers(current => ({ ...current, [offer.id]: item.id }))}>{item.id}</button>)}</div><div className="offer-price"><span>{tier.pack_minor ? 'Per pack' : 'Monthly reference'}</span><strong>{money(tier.pack_minor ?? tier.monthly_minor, tier.currency)}</strong>{!tier.pack_minor && <small>Setup {money(tier.setup_minor, tier.currency)}</small>}{tier.turnaround_hours && <small>{tier.turnaround_hours}-hour turnaround</small>}</div><div className="entitlements">{Object.entries(tier.entitlements).slice(0, 4).map(([key, value]) => <span key={key}><Check size={14} /> {value === 0 ? 'Unlimited' : value} {titleCase(key)}</span>)}</div><button className="button button-secondary" onClick={() => onSubscribe(offer.id, tier.id)} disabled={!connected}>Choose {tier.id}</button></article>})}</section>
     {bundles.map(bundle => <section className="bundle-row" key={bundle.id}><div><span className="section-kicker">Launch bundle</span><h2>Cadence + Studio, one operating rhythm.</h2><p>{bundle.required_offers.join(' + ')} · {bundle.studio_packs_per_month} Studio packs per month</p></div><div className="bundle-price"><span>Monthly reference</span><strong>{money(bundle.monthly_minor, bundle.currency)}</strong><small>Setup {money(bundle.setup_minor, bundle.currency)}</small></div></section>)}
     <ConnectionNote enabled={connected} text="Subscription creation requires an authenticated tenant with the sales role. Prices remain operator-review-required." />
   </div>
@@ -542,10 +547,10 @@ function Offers({ offers, bundles, live, connected, onSubscribe }: { offers: Off
 
 function SettingsPage({ config, user, tenant, connected, pwa, busy, onInstall, onSignIn, onSignOut, onModal }: { config: RuntimeConfig; user: User | null; tenant: Tenant | null; connected: boolean; pwa: ReturnType<typeof usePwa>; busy: boolean; onInstall: () => void; onSignIn: () => void; onSignOut: () => void; onModal: (modal: ModalId) => void }) {
   return <div className="page"><PageHeading kicker="Deployment & safety" title="Know what is connected." copy="Runtime configuration is supplied by the deployment, never persisted as mock tenant data. API requests are network-only and are not cached by the service worker." />
-    <section className="settings-grid"><div className="settings-group"><div className="settings-heading"><LockKeyhole size={20} /><div><h2>Identity and APIs</h2><p>OIDC Authorization Code with PKCE</p></div></div><ConnectionRow label="Core API" value={config.coreApiUrl || 'Not configured'} connected={Boolean(config.coreApiUrl)} /><ConnectionRow label="Orchestrator API" value={config.orchestratorApiUrl || 'Not configured'} connected={Boolean(config.orchestratorApiUrl)} /><ConnectionRow label="OIDC authority" value={config.oidc.authority || 'Not configured'} connected={oidcConfigured(config)} /><ConnectionRow label="Tenant session" value={user ? user.profile.name ?? 'Authenticated' : 'Not signed in'} connected={Boolean(user)} /><div className="settings-action">{user ? <button className="button button-secondary" onClick={onSignOut}><LogOut size={16} /> Sign out of this tab</button> : <button className="button button-primary" onClick={onSignIn} disabled={!oidcConfigured(config)}><LogIn size={16} /> Sign in with OIDC</button>}</div></div>
+    <section className="settings-grid"><div className="settings-group"><div className="settings-heading"><LockKeyhole size={20} /><div><h2>Identity and APIs</h2><p>OIDC Authorization Code with PKCE</p></div></div><ConnectionRow label="Core API" value={config.coreApiUrl || 'Not configured'} connected={Boolean(config.coreApiUrl)} /><ConnectionRow label="Orchestrator API" value={config.orchestratorApiUrl || 'Not configured'} connected={Boolean(config.orchestratorApiUrl)} /><ConnectionRow label="Front-desk API" value={config.conversationsApiUrl || 'Not configured'} connected={Boolean(config.conversationsApiUrl)} /><ConnectionRow label="OIDC authority" value={config.oidc.authority || 'Not configured'} connected={oidcConfigured(config)} /><ConnectionRow label="Tenant session" value={user ? user.profile.name ?? 'Authenticated' : 'Not signed in'} connected={Boolean(user)} /><div className="settings-action">{user ? <button className="button button-secondary" onClick={onSignOut}><LogOut size={16} /> Sign out of this tab</button> : <button className="button button-primary" onClick={onSignIn} disabled={!oidcConfigured(config)}><LogIn size={16} /> Sign in with OIDC</button>}</div></div>
       <div className="settings-group"><div className="settings-heading"><Download size={20} /><div><h2>Installable PWA</h2><p>Desktop and mobile shell</p></div></div><ConnectionRow label="Network" value={pwa.online ? 'Online' : 'Offline'} connected={pwa.online} /><ConnectionRow label="Static offline shell" value={pwa.offlineReady ? 'Ready on this device' : 'Available after service-worker install'} connected={pwa.offlineReady} /><p className="body-copy">The app shell and icons can be cached. Tenant records, bearer tokens, provider responses, and API payloads are never added to runtime caches.</p><div className="settings-action"><button className="button button-secondary" onClick={onInstall}><Download size={16} /> Install or view instructions</button></div></div></section>
     <section className="safety-section"><div><p className="section-kicker">Persistent guardrails</p><h2>Outbound safety controls</h2><p className="body-copy">These actions call the Core API directly with the signed-in user’s tenant claim and role. They require an audit reason and are disabled in preview.</p></div><div className="safety-actions"><button className={`button ${tenant?.outbound_suspended ? 'button-secondary' : 'button-danger'}`} onClick={() => onModal('suspension')} disabled={!connected || busy || !tenant}><Ban size={17} />{tenant?.outbound_suspended ? 'Restore outbound' : 'Suspend outbound'}</button><button className="button button-secondary" onClick={() => onModal('suppression')} disabled={!connected || busy}><ShieldCheck size={17} /> Update suppression</button></div></section>
-    <section className="boundary-note"><CircleAlert size={22} /><div><h3>M1 acceptance is still evidence-based.</h3><p>A connected interface does not prove four-channel delivery, GPU output, RPO/RTO, Wazuh detection, SLO compliance, or cost reconciliation. Those checks still require the staging runbook and real artifacts.</p></div></section>
+    <section className="boundary-note"><CircleAlert size={22} /><div><h3>Staging acceptance is still evidence-based.</h3><p>A connected interface does not prove four-channel delivery, GPU output, RPO/RTO, Wazuh detection, SLO compliance, or cost reconciliation. Those checks still require the staging runbook and real artifacts.</p></div></section>
   </div>
 }
 

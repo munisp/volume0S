@@ -16,11 +16,16 @@ export const previewOffers: Offer[] = [
     { id: 'growth', setup_minor: 4000000, monthly_minor: 5500000, currency: 'NGN', entitlements: { posts: 16, platforms: 3, performance_report: 1 } },
     { id: 'pro', setup_minor: 7500000, monthly_minor: 12000000, currency: 'NGN', entitlements: { posts: 30, platforms: 0, reels: 2, ad_creative_support: 1, strategy_call: 1 } },
   ] },
+  { id: '03', name: 'Call Quality Scorecards', module: 'scorecards', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '04', name: 'AI Front Desk', module: 'conversations', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '05', name: 'Books on Autopilot', module: 'books', commercial_status: 'source-only-unpriced', tiers: [] },
   { id: '06', name: 'Shopfront Studio', module: 'studio', commercial_status: 'operator-review-required', tiers: [
     { id: 'starter', setup_minor: 0, monthly_minor: 0, pack_minor: 2000000, currency: 'NGN', turnaround_hours: 48, entitlements: { images: 5, studio_white: 1, lifestyle: 2 } },
     { id: 'growth', setup_minor: 0, monthly_minor: 0, pack_minor: 3000000, currency: 'NGN', turnaround_hours: 48, entitlements: { images: 7, studio_white: 1, lifestyle: 2, infographic: 1, before_after: 1 } },
     { id: 'pro', setup_minor: 0, monthly_minor: 0, pack_minor: 5500000, currency: 'NGN', turnaround_hours: 48, entitlements: { images: 12, short_video_loops: 1 } },
   ] },
+  { id: '07', name: 'Compliance Watchtower', module: 'compliance', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '08', name: 'Funding Readiness', module: 'funding', commercial_status: 'source-only-unpriced', tiers: [] },
 ]
 
 export const previewBundles: Bundle[] = [{ id: 'growth-cadence-studio', setup_minor: 5000000, monthly_minor: 9900000, currency: 'NGN', required_offers: ['02:growth', '06:growth'], studio_packs_per_month: 2 }]

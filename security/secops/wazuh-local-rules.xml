@@ -1,0 +1,38 @@
+<group name="volumeos,">
+  <rule id="210001" level="12" frequency="10" timeframe="300">
+    <if_sid>2502</if_sid>
+    <field name="data.action">^oidc.validate$</field>
+    <field name="data.outcome">^failure$</field>
+    <description>VolumeOS repeated OIDC validation failure [T1078,T1110]</description>
+    <mitre><id>T1078</id><id>T1110</id></mitre>
+    <same_field>data.source_ip</same_field>
+  </rule>
+  <rule id="210002" level="15">
+    <decoded_as>json</decoded_as>
+    <field name="data.outcome">^denied$</field>
+    <field name="data.action">^tenant.access|postgres.rls$</field>
+    <description>VolumeOS cross-tenant or RLS denial [T1530]</description>
+    <mitre><id>T1530</id></mitre>
+  </rule>
+  <rule id="210003" level="15">
+    <decoded_as>json</decoded_as>
+    <field name="data.outcome">^replay_conflict$</field>
+    <field name="data.action">^tigerbeetle.transfer$</field>
+    <description>VolumeOS financial replay conflict [T1565]</description>
+    <mitre><id>T1565</id></mitre>
+  </rule>
+  <rule id="210004" level="15">
+    <decoded_as>json</decoded_as>
+    <field name="data.approval">^missing$</field>
+    <field name="data.action">^campaign.dispatch|studio.deliver$</field>
+    <description>VolumeOS approval boundary violation [T0854]</description>
+    <mitre><id>T0854</id></mitre>
+  </rule>
+  <rule id="210005" level="15">
+    <decoded_as>json</decoded_as>
+    <field name="data.action">^ai.provider.egress$</field>
+    <field name="data.redacted">^false$</field>
+    <description>VolumeOS unredacted external AI egress [T1567]</description>
+    <mitre><id>T1567</id></mitre>
+  </rule>
+</group>

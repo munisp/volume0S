@@ -1,0 +1,89 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata: {name: volumeos-medallion-etl, namespace: data}
+spec:
+  schedule: "@hourly"
+  concurrencyPolicy: Forbid
+  template:
+    type: Python
+    pythonVersion: "3"
+    mode: cluster
+    image: ghcr.io/munisp/lakehouse-jobs:0.1.0
+    mainApplicationFile: local:///opt/volumeos/jobs/spark_etl.py
+    arguments:
+      - --root
+      - s3a://volumeos-lake
+      - --conform
+      - br_events_message
+      - sl_fact_message
+      - --conform
+      - br_events_usage
+      - sl_fact_usage
+      - --conform
+      - br_cdc_payments
+      - sl_fact_payment
+      - --conform
+      - br_cdc_ai_jobs
+      - sl_fact_ai_job
+      - --conform
+      - br_cdc_tenants
+      - sl_dim_tenant
+      - --conform
+      - br_census_pings
+      - sl_dim_poi
+    sparkVersion: 3.5.3
+    restartPolicy: {type: Never}
+    sparkConf:
+      spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension,org.apache.sedona.sql.SedonaSqlExtensions
+      spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+      spark.hadoop.fs.s3a.endpoint: http://minio.data.svc.cluster.local:9000
+      spark.hadoop.fs.s3a.path.style.access: "true"
+      spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+    deps:
+      packages:
+        - io.delta:delta-spark_2.12:3.2.1
+        - org.apache.sedona:sedona-spark-shaded-3.0_2.12:1.7.1
+        - org.datasyslab:geotools-wrapper:1.7.1-28.5
+    driver:
+      cores: 1
+      memory: 1g
+      serviceAccount: spark-operator
+    executor:
+      cores: 1
+      instances: 2
+      memory: 2g
+---
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata: {name: volumeos-delta-maintenance, namespace: data}
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  template:
+    type: Python
+    pythonVersion: "3"
+    mode: cluster
+    image: ghcr.io/munisp/lakehouse-jobs:0.1.0
+    mainApplicationFile: local:///opt/volumeos/jobs/spark_etl.py
+    arguments: [--root, s3a://volumeos-lake, --maintenance, br_census_pings, --maintenance, sl_dim_poi, --maintenance, gt_campaign_perf, --maintenance, gt_territory_scores, --maintenance, gt_lga_density, --maintenance, gt_client_health, --maintenance, gt_cost_per_client, --maintenance, gt_revenue_by_offer]
+    sparkVersion: 3.5.3
+    restartPolicy: {type: Never}
+    sparkConf:
+      spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension,org.apache.sedona.sql.SedonaSqlExtensions
+      spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+      spark.hadoop.fs.s3a.endpoint: http://minio.data.svc.cluster.local:9000
+      spark.hadoop.fs.s3a.path.style.access: "true"
+      spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+    deps:
+      packages:
+        - io.delta:delta-spark_2.12:3.2.1
+        - org.apache.sedona:sedona-spark-shaded-3.0_2.12:1.7.1
+        - org.datasyslab:geotools-wrapper:1.7.1-28.5
+    driver:
+      cores: 1
+      memory: 1g
+      serviceAccount: spark-operator
+    executor:
+      cores: 1
+      instances: 1
+      memory: 1g

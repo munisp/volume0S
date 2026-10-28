@@ -1,0 +1,7 @@
+{
+  "event_id_input": "tenant-a|device-1|local-1",
+  "event_id": "48MMQRF017Y0HQ4C8QSQG8DD7Z",
+  "chunk_size": 262144,
+  "chunk_fixture": "VolumeOS",
+  "chunk_sha256": "a7c1d9ce1783084f56811bb50a04edff2534c5235da361684a9fd5aed2ab3d89"
+}

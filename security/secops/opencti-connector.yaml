@@ -1,0 +1,18 @@
+# Sanitized example: deploy through the secret manager, never with bootstrap tokens.
+connector:
+  id: volumeos-security-enrichment
+  type: EXTERNAL_IMPORT
+  scope: volumeos-sanitized-detections
+  auto: false
+  only_contextual: true
+opencti:
+  url: https://opencti.security.example.invalid
+  token_secret: secret/security/opencti#token
+source:
+  opensearch_url: https://opensearch.security.example.invalid
+  index_pattern: volumeos-security-*
+  credentials_secret: secret/security/opensearch#reader
+mapping:
+  report_types: [incident, intrusion-set, attack-pattern]
+  accepted_mitre_ids: [T1078, T1110, T1530, T1190, T1565, T0857, T0854, T1485, T1567, T1059]
+  excluded_fields: [prompt, subject, phone, email, address, authorization, token, payment_reference]

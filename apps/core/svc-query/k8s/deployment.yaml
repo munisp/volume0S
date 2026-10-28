@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: svc-query, namespace: core}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: svc-query, namespace: core}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app.kubernetes.io/name: svc-query}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: svc-query}}
+    spec:
+      serviceAccountName: svc-query
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: api
+          image: ghcr.io/munisp/svc-query:0.1.0
+          ports: [{containerPort: 8080, name: http}, {containerPort: 8081, name: grpc}]
+          env:
+            - {name: GOLD_DELTA_ROOT, value: s3://volumeos-gold}
+            - {name: AWS_ENDPOINT_URL, value: http://minio.data.svc.cluster.local:9000}
+            - {name: AWS_REGION, value: us-east-1}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: svc-query, key: s3-access-key}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: svc-query, key: s3-secret-key}}
+            - name: OIDC_ISSUER
+              valueFrom: {secretKeyRef: {name: svc-query, key: oidc-issuer}}
+            - name: OIDC_AUDIENCE
+              valueFrom: {secretKeyRef: {name: svc-query, key: oidc-audience}}
+            - name: OIDC_JWKS_URL
+              valueFrom: {secretKeyRef: {name: svc-query, key: oidc-jwks-url}}
+          readinessProbe: {httpGet: {path: /health/ready, port: http}}
+          livenessProbe: {httpGet: {path: /health/live, port: http}}
+          resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: svc-query, namespace: core}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: svc-query}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+    - {name: grpc, port: 8081, targetPort: grpc}

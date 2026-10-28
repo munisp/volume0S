@@ -1,6 +1,7 @@
 {
   "coreApiUrl": "",
   "orchestratorApiUrl": "",
+  "conversationsApiUrl": "",
   "oidc": {
     "authority": "",
     "clientId": "",
