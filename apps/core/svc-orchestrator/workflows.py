@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 from temporalio.client import Client
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.service import RPCError, RPCStatusCode
@@ -16,13 +17,13 @@ class TemporalWorkflows:
         self.client = client
 
     async def ready(self) -> None:
-        await self.client.workflow_service.get_system_info()
+        await self.client.workflow_service.get_system_info(GetSystemInfoRequest())
 
     async def start(self, workflow_type: str, argument: dict[str, Any],
                     workflow_id: str, task_queue: str) -> None:
         await self.client.start_workflow(
             workflow_type, argument, id=workflow_id, task_queue=task_queue,
-            id_reuse_policy=WorkflowIDReusePolicy.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
         )
 
     async def query(self, workflow_id: str, run_id: str | None = None) -> dict[str, Any]:
