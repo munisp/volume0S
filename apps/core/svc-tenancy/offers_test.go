@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func offerTier(t *testing.T, offerID, tierID string) OfferTier {
 	t.Helper()
@@ -84,5 +88,20 @@ func TestRemainingOffersArePresentWithoutInventedPrices(t *testing.T) {
 	}
 	if len(seen) != 5 {
 		t.Fatalf("remaining offers missing from catalog: %+v", seen)
+	}
+}
+
+func TestUnpricedOffersEncodeEmptyTierLists(t *testing.T) {
+	offers, bundles := OfferCatalog()
+	raw, err := json.Marshal(map[string]any{"offers": offers, "bundles": bundles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Clients index tiers[0]; a null list crashes them.
+	if strings.Contains(string(raw), `"tiers":null`) || strings.Contains(string(raw), `"required_offers":null`) {
+		t.Fatalf("catalog encodes a null list: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"tiers":[]`) {
+		t.Fatal("expected unpriced offers to encode tiers as []")
 	}
 }
