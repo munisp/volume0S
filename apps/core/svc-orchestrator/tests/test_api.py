@@ -264,3 +264,141 @@ def test_offer_review_binds_current_artifact_and_oidc_reviewer(services):
     workflows.snapshots[workflow_id] = offer_snapshot("released")
     assert client.post("/v1/offers/jobs/job-1/review", headers=auth(),
                        json={"decision": "approved", "reason": "checked", "artifact_sha256": "d" * 64}).status_code == 409
+
+
+def engagement_snapshot(status="awaiting-approval"):
+    return {
+        "tenant_id": "tenant-a", "engagement_id": "engagement-1", "offer": "27",
+        "title": "Website planning", "status": status,
+        "commercial_status": "source-only-unpriced", "delivery_mode": "plan-only",
+        "charges_enabled": False, "external_actions_enabled": False,
+        "plan": {"sha256": "a" * 64, "object_key": "tenant-a/engagements/27/engagement-1/plan-v1.json"},
+        "document": {"schema_version": "volumeos.engagement-plan.v1"},
+        "review": None, "started_at": "2026-11-08T00:00:00Z", "updated_at": "2026-11-08T00:00:00Z",
+    }
+
+
+def engagement_input(**changes):
+    value = {
+        "engagement_id": "engagement-1", "offer": "27", "title": "Website planning",
+        "scope": "Define the redesign scope and approval gates.",
+        "requested_outcome": "A reviewable delivery plan.",
+    }
+    value.update(changes)
+    return value
+
+
+def test_engagement_start_derives_tenant_and_never_accepts_commercial_fields(services):
+    client, workflows, _ = services
+    response = client.post("/v1/engagements", headers=auth(), json=engagement_input())
+    assert response.status_code == 202
+    assert response.json()["delivery_mode"] == "plan-only"
+    workflow_type, argument, workflow_id, queue = workflows.started[0]
+    assert workflow_type == "EngagementWorkflow"
+    assert argument == engagement_input() | {"tenant_id": "tenant-a"}
+    assert workflow_id == "engagement:tenant-a:engagement-1"
+    assert queue == "engagements-v1"
+    assert not ({"amount_minor", "currency", "price", "tiers"} & argument.keys())
+    for injected in ({"tenant_id": "tenant-b"}, {"amount_minor": 1000}, {"currency": "NGN"}):
+        rejected = client.post("/v1/engagements", headers=auth(), json=engagement_input() | injected)
+        assert rejected.status_code == 400
+    assert len(workflows.started) == 1
+
+
+def test_engagement_start_rejects_non_volume_iii_offers_and_unbounded_input(services):
+    client, workflows, _ = services
+    for body in (
+        engagement_input(offer="26"),
+        engagement_input(offer="03"),
+        engagement_input(title=""),
+        engagement_input(scope=""),
+        engagement_input(engagement_id="../escape"),
+    ):
+        assert client.post("/v1/engagements", headers=auth(), json=body).status_code == 400
+    assert workflows.started == []
+
+
+def test_engagement_list_and_get_use_only_authenticated_tenant_scope(services):
+    client, workflows, _ = services
+    workflow_id = "engagement:tenant-a:engagement-1"
+    workflows.snapshots[workflow_id] = engagement_snapshot()
+    workflows.snapshots["engagement:tenant-b:engagement-2"] = engagement_snapshot() | {
+        "tenant_id": "tenant-b", "engagement_id": "engagement-2",
+    }
+    listed = client.get("/v1/engagements", headers=auth())
+    assert listed.status_code == 200
+    assert workflows.prefixes == ["engagement:tenant-a:"]
+    assert [item["engagement_id"] for item in listed.json()["engagements"]] == ["engagement-1"]
+    fetched = client.get("/v1/engagements/engagement-1", headers=auth())
+    assert fetched.status_code == 200
+    assert fetched.json()["document"]["schema_version"] == "volumeos.engagement-plan.v1"
+    workflows.snapshots[workflow_id] = engagement_snapshot() | {"tenant_id": "tenant-b"}
+    assert client.get("/v1/engagements/engagement-1", headers=auth()).status_code == 404
+
+
+def test_engagement_review_rejects_stale_plan_and_invalid_state(services):
+    client, workflows, _ = services
+    workflow_id = "engagement:tenant-a:engagement-1"
+    workflows.snapshots[workflow_id] = engagement_snapshot()
+    stale = client.post("/v1/engagements/engagement-1/review", headers=auth(), json={
+        "decision": "approved", "reason": "checked", "plan_sha256": "b" * 64,
+    })
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "stale_plan"
+    workflows.snapshots[workflow_id] = engagement_snapshot("approved")
+    terminal = client.post("/v1/engagements/engagement-1/review", headers=auth(), json={
+        "decision": "approved", "reason": "checked", "plan_sha256": "a" * 64,
+    })
+    assert terminal.status_code == 409
+    assert workflows.signals == []
+
+
+def test_engagement_review_binds_plan_and_oidc_reviewer(services):
+    client, workflows, _ = services
+    workflow_id = "engagement:tenant-a:engagement-1"
+    workflows.snapshots[workflow_id] = engagement_snapshot()
+    response = client.post("/v1/engagements/engagement-1/review", headers=auth(), json={
+        "decision": "approved", "reason": "Scope and controls checked.", "plan_sha256": "a" * 64,
+    })
+    assert response.status_code == 202
+    assert len(workflows.signals) == 1
+    signal = workflows.signals[0]
+    assert signal[:2] == (workflow_id, "review")
+    assert signal[2]["plan_sha256"] == "a" * 64
+    assert signal[2]["reviewer"] == "operator-1"
+    assert signal[2]["decision"] == "approved"
+    assert signal[2]["reviewed_at_unix"] > 0
+
+
+def test_engagement_rbac_allows_analyst_review_but_not_sales_mutation():
+    analyst_app = create_app(
+        FakeWorkflows(), FakeAuthenticator(Claims("tenant-a", "analyst-1", frozenset({"analyst"}))), FakeQAAssets(),
+    )
+    with TestClient(analyst_app) as client:
+        workflow_id = "engagement:tenant-a:engagement-1"
+        client.app.state.workflows.snapshots[workflow_id] = engagement_snapshot()
+        review = client.post("/v1/engagements/engagement-1/review", headers=auth(), json={
+            "decision": "rejected", "reason": "Scope needs revision.", "plan_sha256": "a" * 64,
+        })
+        assert review.status_code == 202
+        assert client.app.state.workflows.signals[0][2]["reviewer"] == "analyst-1"
+    sales_app = create_app(
+        FakeWorkflows(), FakeAuthenticator(Claims("tenant-a", "sales-1", frozenset({"sales"}))), FakeQAAssets(),
+    )
+    with TestClient(sales_app) as client:
+        assert client.get("/v1/engagements", headers=auth()).status_code == 200
+        assert client.post("/v1/engagements", headers=auth(), json=engagement_input()).status_code == 403
+        client.app.state.workflows.snapshots["engagement:tenant-a:engagement-1"] = engagement_snapshot()
+        assert client.post("/v1/engagements/engagement-1/review", headers=auth(), json={
+            "decision": "approved", "reason": "checked", "plan_sha256": "a" * 64,
+        }).status_code == 403
+
+
+def test_engagement_path_id_uses_bounded_contract(services):
+    client, workflows, _ = services
+    invalid_id = "x" * 129
+    response = client.post(f"/v1/engagements/{invalid_id}/review", headers=auth(), json={
+        "decision": "approved", "reason": "checked", "plan_sha256": "a" * 64,
+    })
+    assert response.status_code == 400
+    assert workflows.signals == []
