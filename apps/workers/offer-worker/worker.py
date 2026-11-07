@@ -22,6 +22,7 @@ from books import DoclingClient, accounting_csv, accounting_csv_bytes
 from common import Approval, Artifact, BudgetGuard, OfferError, RedactedAIClient, identifier, sha256
 from compliance import BrowserAgentClient, Licence, paperwork, paperwork_payload
 from costs import PostgresCostLedger
+from engagements import EngagementWorkflow, build_engagement_plan
 from funding import FundingJob, generate_draft, new_artifact, release_funding
 from scorecards import WhisperXClient, build_report, release_report, report_payload, rubric_score
 from books import release_export
@@ -253,9 +254,12 @@ class OfferWorkflow:
 async def main() -> None:
     client = await Client.connect(os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
                                   namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"))
-    worker = Worker(client, task_queue="offers-v1", workflows=[OfferWorkflow],
-                    activities=[reserve_offer_charge, settle_offer_charge, execute_offer, release_offer])
-    await worker.run()
+    offer_worker = Worker(client, task_queue="offers-v1", workflows=[OfferWorkflow],
+                          activities=[reserve_offer_charge, settle_offer_charge, execute_offer, release_offer])
+    engagement_worker = Worker(client, task_queue="engagements-v1", workflows=[EngagementWorkflow],
+                               activities=[build_engagement_plan])
+    async with offer_worker, engagement_worker:
+        await asyncio.gather(offer_worker.run(), engagement_worker.run())
 
 
 if __name__ == "__main__":

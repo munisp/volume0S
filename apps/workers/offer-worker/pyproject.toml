@@ -9,7 +9,7 @@ dependencies = ["temporalio>=1.18,<2", "httpx>=0.28,<1", "boto3>=1.35,<2", "asyn
 [project.optional-dependencies]
 test = ["pytest>=8,<9", "pytest-asyncio>=0.25,<1"]
 [tool.setuptools]
-py-modules = ["common", "scorecards", "front_desk", "books", "compliance", "funding", "costs", "worker"]
+py-modules = ["common", "scorecards", "front_desk", "books", "compliance", "funding", "costs", "engagements", "worker"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
