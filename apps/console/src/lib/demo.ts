@@ -26,6 +26,51 @@ export const previewOffers: Offer[] = [
   ] },
   { id: '07', name: 'Compliance Watchtower', module: 'compliance', commercial_status: 'source-only-unpriced', tiers: [] },
   { id: '08', name: 'Funding Readiness', module: 'funding', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '09', name: 'Offline POS & Cash Control', module: 'commerce.pos', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '10', name: 'Inventory & Reorder Autopilot', module: 'commerce.inventory', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '11', name: 'Social Storefront & Order Capture', module: 'commerce.storefront', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '12', name: 'Quotes & Sales Pipeline', module: 'commerce.quotes', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '13', name: 'Deposits & Instalment Orders', module: 'commerce.instalments', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '14', name: 'Bookings & Service Dispatch', module: 'commerce.bookings', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '15', name: 'Loyalty & Referral Rewards', module: 'commerce.loyalty', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '16', name: 'Purchasing & Landed Cost', module: 'commerce.purchasing', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '17', name: 'Omnichannel Support & SLA', module: 'commerce.support', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '18', name: 'Field Sales & Van Stock', module: 'commerce.fieldsales', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '19', name: 'Language Multiplier', module: 'media.dubbing', commercial_status: 'operator-review-required', tiers: [
+    { id: 'starter', setup_minor: 4000000, monthly_minor: 4500000, currency: 'NGN', entitlements: { videos_per_month: 2, languages: 1 } },
+    { id: 'growth', setup_minor: 6000000, monthly_minor: 7500000, currency: 'NGN', entitlements: { videos_per_month: 4, languages: 2, subtitles: 1 } },
+    { id: 'pro', setup_minor: 10000000, monthly_minor: 12000000, currency: 'NGN', entitlements: { videos_per_month: 8, languages: 3, series_handling: 1 } },
+  ] },
+  { id: '20', name: 'Vibe-Code Audit', module: 'security.audit', commercial_status: 'operator-review-required', tiers: [
+    { id: 'audit', setup_minor: 0, monthly_minor: 0, pack_minor: 22000000, currency: 'NGN', entitlements: { documented_findings: 1, prioritized_fix_list: 1, evidence_pack: 1 } },
+    { id: 're-audit', setup_minor: 0, monthly_minor: 8500000, currency: 'NGN', entitlements: { release_re_audit: 1, release_note_review: 1 } },
+  ] },
+  { id: '21', name: 'Department Copilot', module: 'knowledge.copilot', commercial_status: 'operator-review-required', tiers: [
+    { id: 'department', setup_minor: 12000000, monthly_minor: 6500000, currency: 'NGN', entitlements: { departments: 1, call_preparation: 1, same_day_follow_up: 1, monday_pipeline_review: 1 } },
+  ] },
+  { id: '22', name: 'Intent Radar', module: 'leads.intent', commercial_status: 'operator-review-required', tiers: [
+    { id: 'daily-digest', setup_minor: 3000000, monthly_minor: 5500000, currency: 'NGN', entitlements: { opportunities_per_day: 5, competitor_gripe_log: 1, human_voice_review: 1 } },
+  ] },
+  { id: '23', name: 'Monday Dashboard', module: 'analytics.dashboard', commercial_status: 'operator-review-required', tiers: [
+    { id: 'monday', setup_minor: 12000000, monthly_minor: 7000000, currency: 'NGN', entitlements: { data_sources: 3, kpi_metrics: 10, monday_digest: 1 } },
+  ] },
+  { id: '24', name: 'Paperless Office', module: 'documents.archive', commercial_status: 'operator-review-required', tiers: [
+    { id: 'archive', setup_minor: 10000000, monthly_minor: 5000000, currency: 'NGN', entitlements: { searchable_archive: 1, archive_qa: 1, retention_policy: 1 } },
+  ] },
+  { id: '25', name: 'Collections Engine', module: 'collections.receivables', commercial_status: 'operator-review-required', tiers: [
+    { id: 'collections', setup_minor: 5000000, monthly_minor: 5500000, currency: 'NGN', entitlements: { reminder_steps: 4, weekly_receivables_report: 1, human_escalation: 1 } },
+  ] },
+  { id: '26', name: 'Attribution Engine', module: 'marketing.attribution', commercial_status: 'operator-review-required', tiers: [
+    { id: 'attribution', setup_minor: 3000000, monthly_minor: 4000000, currency: 'NGN', entitlements: { qr_artwork: 1, monthly_attribution_report: 1, whatsapp_clickthrough: 1, keyword_fallback: 1 } },
+  ] },
+  { id: '27', name: 'Website Makeover Studio', module: 'web.makeover', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '28', name: 'Video Ad Packs', module: 'media.ads', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '29', name: 'Course Tutor', module: 'education.tutor', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '30', name: 'AI Team Install', module: 'agents.teams', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '31', name: 'Replacement Part Design', module: 'cad.parts', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '32', name: 'Industry Audio Briefings', module: 'research.briefings', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '33', name: 'Bid Radar', module: 'procurement.radar', commercial_status: 'source-only-unpriced', tiers: [] },
+  { id: '34', name: 'Website Guard', module: 'monitoring.website', commercial_status: 'source-only-unpriced', tiers: [] },
 ]
 
 export const previewBundles: Bundle[] = [{ id: 'growth-cadence-studio', setup_minor: 5000000, monthly_minor: 9900000, currency: 'NGN', required_offers: ['02:growth', '06:growth'], studio_packs_per_month: 2 }]

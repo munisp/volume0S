@@ -50,6 +50,56 @@ var q1Offers = []Offer{
 	}},
 	{ID: "07", Name: "Compliance Watchtower", Module: "compliance", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
 	{ID: "08", Name: "Funding Readiness", Module: "funding", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "09", Name: "Offline POS & Cash Control", Module: "commerce.pos", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "10", Name: "Inventory & Reorder Autopilot", Module: "commerce.inventory", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "11", Name: "Social Storefront & Order Capture", Module: "commerce.storefront", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "12", Name: "Quotes & Sales Pipeline", Module: "commerce.quotes", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "13", Name: "Deposits & Instalment Orders", Module: "commerce.instalments", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "14", Name: "Bookings & Service Dispatch", Module: "commerce.bookings", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "15", Name: "Loyalty & Referral Rewards", Module: "commerce.loyalty", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "16", Name: "Purchasing & Landed Cost", Module: "commerce.purchasing", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "17", Name: "Omnichannel Support & SLA", Module: "commerce.support", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "18", Name: "Field Sales & Van Stock", Module: "commerce.fieldsales", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	// Volume II opportunities 09–16 become catalog Offers 19–26 because the
+	// developing-market commerce increment already occupies Offers 09–18.
+	{ID: "19", Name: "Language Multiplier", Module: "media.dubbing", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "starter", SetupMinor: 4000000, MonthlyMinor: 4500000, Currency: "NGN", Entitlements: map[string]int{"videos_per_month": 2, "languages": 1}},
+		{ID: "growth", SetupMinor: 6000000, MonthlyMinor: 7500000, Currency: "NGN", Entitlements: map[string]int{"videos_per_month": 4, "languages": 2, "subtitles": 1}},
+		{ID: "pro", SetupMinor: 10000000, MonthlyMinor: 12000000, Currency: "NGN", Entitlements: map[string]int{"videos_per_month": 8, "languages": 3, "series_handling": 1}},
+	}},
+	{ID: "20", Name: "Vibe-Code Audit", Module: "security.audit", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "audit", PackMinor: 22000000, Currency: "NGN", Entitlements: map[string]int{"documented_findings": 1, "prioritized_fix_list": 1, "evidence_pack": 1}},
+		{ID: "re-audit", MonthlyMinor: 8500000, Currency: "NGN", Entitlements: map[string]int{"release_re_audit": 1, "release_note_review": 1}},
+	}},
+	{ID: "21", Name: "Department Copilot", Module: "knowledge.copilot", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "department", SetupMinor: 12000000, MonthlyMinor: 6500000, Currency: "NGN", Entitlements: map[string]int{"departments": 1, "call_preparation": 1, "same_day_follow_up": 1, "monday_pipeline_review": 1}},
+	}},
+	{ID: "22", Name: "Intent Radar", Module: "leads.intent", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "daily-digest", SetupMinor: 3000000, MonthlyMinor: 5500000, Currency: "NGN", Entitlements: map[string]int{"opportunities_per_day": 5, "competitor_gripe_log": 1, "human_voice_review": 1}},
+	}},
+	{ID: "23", Name: "Monday Dashboard", Module: "analytics.dashboard", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "monday", SetupMinor: 12000000, MonthlyMinor: 7000000, Currency: "NGN", Entitlements: map[string]int{"data_sources": 3, "kpi_metrics": 10, "monday_digest": 1}},
+	}},
+	{ID: "24", Name: "Paperless Office", Module: "documents.archive", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "archive", SetupMinor: 10000000, MonthlyMinor: 5000000, Currency: "NGN", Entitlements: map[string]int{"searchable_archive": 1, "archive_qa": 1, "retention_policy": 1}},
+	}},
+	{ID: "25", Name: "Collections Engine", Module: "collections.receivables", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "collections", SetupMinor: 5000000, MonthlyMinor: 5500000, Currency: "NGN", Entitlements: map[string]int{"reminder_steps": 4, "weekly_receivables_report": 1, "human_escalation": 1}},
+	}},
+	{ID: "26", Name: "Attribution Engine", Module: "marketing.attribution", CommercialStatus: "operator-review-required", Tiers: []OfferTier{
+		{ID: "attribution", SetupMinor: 3000000, MonthlyMinor: 4000000, Currency: "NGN", Entitlements: map[string]int{"qr_artwork": 1, "monthly_attribution_report": 1, "whatsapp_clickthrough": 1, "keyword_fallback": 1}},
+	}},
+	// Volume III translates the eight video concepts into VolumeOS service
+	// offers. External projects are inspirations, not deployed integrations;
+	// delivery workflows and operator-approved commercial terms remain open.
+	{ID: "27", Name: "Website Makeover Studio", Module: "web.makeover", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "28", Name: "Video Ad Packs", Module: "media.ads", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "29", Name: "Course Tutor", Module: "education.tutor", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "30", Name: "AI Team Install", Module: "agents.teams", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "31", Name: "Replacement Part Design", Module: "cad.parts", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "32", Name: "Industry Audio Briefings", Module: "research.briefings", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "33", Name: "Bid Radar", Module: "procurement.radar", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	{ID: "34", Name: "Website Guard", Module: "monitoring.website", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
 }
 
 var q1Bundles = []Bundle{{
