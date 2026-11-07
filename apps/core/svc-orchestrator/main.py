@@ -83,6 +83,20 @@ class OfferReview(InputModel):
     artifact_sha256: str = Field(pattern=SHA256_PATTERN)
 
 
+class EngagementStart(InputModel):
+    engagement_id: str = Field(pattern=ID_PATTERN)
+    offer: Literal["27", "28", "29", "30", "31", "32", "33", "34"]
+    title: str = Field(min_length=1, max_length=160)
+    scope: str = Field(min_length=1, max_length=10_000)
+    requested_outcome: str = Field(default="", max_length=5_000)
+
+
+class EngagementReview(InputModel):
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1, max_length=1_000)
+    plan_sha256: str = Field(pattern=SHA256_PATTERN)
+
+
 class PartyInput(InputModel):
     legal_name: str = Field(min_length=2, max_length=160)
     tin: str = Field(pattern=r"^\d{8,14}$")
@@ -199,7 +213,7 @@ def sorted_snapshots(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any = None, money: Any = None) -> FastAPI:
-    app = FastAPI(title="VolumeOS Orchestrator", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="VolumeOS Orchestrator", version="0.5.0", lifespan=lifespan)
     app.state.workflows = workflows
     app.state.authenticator = authenticator
     app.state.qa_assets = qa_assets
@@ -402,6 +416,59 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
             "reviewed_at_unix": int(datetime.now(timezone.utc).timestamp()),
         })
         return {"status": "accepted", "job_id": job_id}
+
+    @app.get("/v1/engagements")
+    async def engagements(claims: Claims = Depends(current_claims)):
+        require(claims, "reader")
+        snapshots = await app.state.workflows.list(f"engagement:{claims.tenant_id}:")
+        for snapshot in snapshots:
+            if snapshot.get("tenant_id") != claims.tenant_id:
+                raise error("Workflow tenant scope mismatch.", 403, "forbidden")
+        return {"engagements": sorted_snapshots(snapshots)}
+
+    @app.post("/v1/engagements", status_code=202)
+    async def start_engagement(body: EngagementStart, claims: Claims = Depends(current_claims)):
+        require(claims, "delivery")
+        argument = body.model_dump() | {"tenant_id": claims.tenant_id}
+        try:
+            await app.state.workflows.start(
+                "EngagementWorkflow", argument,
+                f"engagement:{claims.tenant_id}:{body.engagement_id}", "engagements-v1",
+            )
+        except WorkflowAlreadyStartedError as exc:
+            raise error("Engagement ID already exists.", 409, "conflict") from exc
+        return {
+            "status": "accepted", "engagement_id": body.engagement_id,
+            "commercial_status": "source-only-unpriced", "delivery_mode": "plan-only",
+        }
+
+    @app.get("/v1/engagements/{engagement_id}")
+    async def engagement(engagement_id: ResourceId, claims: Claims = Depends(current_claims)):
+        require(claims, "reader")
+        snapshot = await app.state.workflows.query(f"engagement:{claims.tenant_id}:{engagement_id}")
+        verify_snapshot(snapshot, claims, "engagement_id", engagement_id)
+        return snapshot
+
+    @app.post("/v1/engagements/{engagement_id}/review", status_code=202)
+    async def review_engagement(
+        engagement_id: ResourceId, body: EngagementReview, claims: Claims = Depends(current_claims),
+    ):
+        if not (claims.can("delivery") or claims.can("analyst")):
+            raise error("A delivery operator or analyst is required.", 403, "forbidden")
+        workflow_id = f"engagement:{claims.tenant_id}:{engagement_id}"
+        snapshot = await app.state.workflows.query(workflow_id)
+        verify_snapshot(snapshot, claims, "engagement_id", engagement_id)
+        plan = snapshot.get("plan")
+        if snapshot.get("status") != "awaiting-approval" or not isinstance(plan, dict):
+            raise error("Engagement is not awaiting plan approval.", 409, "invalid_state")
+        if plan.get("sha256") != body.plan_sha256:
+            raise error("Plan changed; reload the engagement before reviewing.", 409, "stale_plan")
+        await app.state.workflows.signal(workflow_id, "review", {
+            "plan_sha256": body.plan_sha256, "reviewer": claims.actor,
+            "decision": body.decision, "reason": body.reason,
+            "reviewed_at_unix": int(datetime.now(timezone.utc).timestamp()),
+        })
+        return {"status": "accepted", "engagement_id": engagement_id}
 
     @app.get("/v1/billing/balance/{currency}")
     async def billing_balance(currency: Literal["NGN", "USD"], claims: Claims = Depends(current_claims)):

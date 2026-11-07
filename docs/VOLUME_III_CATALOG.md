@@ -1,6 +1,6 @@
 # Volume III video-derived service catalog
 
-Status date: 2026-11-08. Source: Corey Ganim / Build With AI, [“I investigated 8 GitHub repos that print money”](https://youtu.be/eHljw6IG0sE). This increment translates the video's eight service concepts into VolumeOS Offers **27–34**. It adds commercial catalog and console reference entries only; it does not implement their delivery workflows or assert operational acceptance.
+Status date: 2026-11-08. Source: Corey Ganim / Build With AI, [“I investigated 8 GitHub repos that print money”](https://youtu.be/eHljw6IG0sE). This increment translates the video's eight service concepts into VolumeOS Offers **27–34**. The catalog and console entries are complemented by a [plan-only engagement and approval workflow](VOLUME_III_ENGAGEMENTS.md); production delivery and operational acceptance remain unimplemented.
 
 ## Numbering, pricing, and source boundaries
 
@@ -61,11 +61,11 @@ No numeric rate is approved by this document. For each offer, the operator defin
 
 ## Platform boundaries
 
-- This is a **catalog increment**, not eight new production service implementations.
+- The catalog and plan-only engagement increments are **not eight new production service implementations**.
 - The catalog API and console preview expose **34 offers** after this increment.
-- Offers 27–34 have no prices, tiers, entitlements, subscription path, charge path, or production delivery workflow.
+- Offers 27–34 have no prices, tiers, entitlements, subscription path, charge path, or production delivery path. Their separate engagement workflow only creates and reviews delivery plans.
 - Existing Core subscription validation remains limited to Offers 01–08; Volume III subscription attempts are rejected.
 - The console's existing Offer 19-and-above gate covers Volume II and Volume III. Unpriced rows also have no selectable tier or subscription action.
 - Repository availability does not prove integration, license clearance, security, service quality, customer demand, or commercial readiness.
-- Durable persistence/RLS, tenant-scoped APIs, Temporal workflows, provider connectors, observability, backup/restore, security/privacy review, service levels, operator-approved pricing, staging evidence, and customer acceptance remain open for all eight offers.
+- Provider connectors, production persistence/RLS for delivered artifacts, observability, backup/restore, security/privacy review, service levels, operator-approved pricing, staging evidence, and customer acceptance remain open for all eight offers.
 - Human approval remains mandatory before external publication, customer communication, production changes, fabrication handoff, or Studio delivery.
