@@ -270,7 +270,7 @@ orchestrator_contracts = {
         'options={"require": ["exp", "tenant_id", "sub"]}', "return Claims(tenant_id, actor, role_set)",
     ),
     "workflows.py": (
-        'await handle.query("status")', "WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE",
+        'await handle.query("status")', "WorkflowIDReusePolicy.REJECT_DUPLICATE", "service_client.check_health()",
         'WorkflowId STARTS_WITH', "QUEUE_LIMIT = 100",
     ),
     "main.py": (
