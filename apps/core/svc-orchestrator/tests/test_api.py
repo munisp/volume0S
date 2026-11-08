@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from temporalio.common import WorkflowIDReusePolicy
 
 from auth import AuthenticationError, Claims
 from main import create_app
+from workflows import TemporalWorkflows
 
 
 class FakeAuthenticator:
@@ -402,3 +406,22 @@ def test_engagement_path_id_uses_bounded_contract(services):
     })
     assert response.status_code == 400
     assert workflows.signals == []
+
+
+@pytest.mark.asyncio
+async def test_temporal_readiness_uses_supported_health_rpc():
+    health = AsyncMock(return_value=True)
+    client = SimpleNamespace(service_client=SimpleNamespace(check_health=health))
+    await TemporalWorkflows(client).ready()
+    health.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_temporal_start_rejects_duplicate_workflow_ids_with_supported_enum():
+    start = AsyncMock()
+    client = SimpleNamespace(start_workflow=start)
+    await TemporalWorkflows(client).start(
+        "EngagementWorkflow", {"tenant_id": "tenant-a"},
+        "engagement:tenant-a:plan-1", "engagements-v1",
+    )
+    assert start.await_args.kwargs["id_reuse_policy"] is WorkflowIDReusePolicy.REJECT_DUPLICATE
