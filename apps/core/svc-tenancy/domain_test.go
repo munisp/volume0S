@@ -44,6 +44,9 @@ func TestSubscriptionValidation(t *testing.T) {
 	if err := ValidateSubscription("99", "growth"); err == nil {
 		t.Fatal("invalid offer accepted")
 	}
+	if err := ValidateSubscription("03", "starter"); err == nil {
+		t.Fatal("expected an unpriced offer to refuse subscriptions")
+	}
 	if err := ValidateSubscription("02", "free"); err == nil {
 		t.Fatal("invalid tier accepted")
 	}

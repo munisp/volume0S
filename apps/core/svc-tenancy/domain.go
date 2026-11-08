@@ -132,10 +132,23 @@ func ValidateSubscription(offer, tier string) error {
 	}
 	switch tier {
 	case "starter", "growth", "pro":
-		return nil
 	default:
 		return fmt.Errorf("tier must be starter, growth, or pro")
 	}
+	// Only a tier the catalog prices can be bought: unpriced offers (no tiers yet) take no subscriptions.
+	offers, _ := OfferCatalog()
+	for _, o := range offers {
+		if o.ID != offer {
+			continue
+		}
+		for _, t := range o.Tiers {
+			if t.ID == tier {
+				return nil
+			}
+		}
+		return fmt.Errorf("offer %s has no %s tier in the price book", offer, tier)
+	}
+	return fmt.Errorf("offer %s is not in the price book", offer)
 }
 
 func newID() string {

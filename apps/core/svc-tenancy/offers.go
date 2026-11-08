@@ -111,7 +111,8 @@ func OfferCatalog() ([]Offer, []Bundle) {
 	offers := make([]Offer, len(q1Offers))
 	copy(offers, q1Offers)
 	for i := range offers {
-		offers[i].Tiers = append([]OfferTier(nil), q1Offers[i].Tiers...)
+		// Copies start from an empty slice: an unpriced offer has no tiers, and its list must encode as [] (not null).
+		offers[i].Tiers = append(make([]OfferTier, 0, len(q1Offers[i].Tiers)), q1Offers[i].Tiers...)
 		for j := range offers[i].Tiers {
 			offers[i].Tiers[j].Entitlements = make(map[string]int, len(q1Offers[i].Tiers[j].Entitlements))
 			for key, value := range q1Offers[i].Tiers[j].Entitlements {
@@ -121,7 +122,7 @@ func OfferCatalog() ([]Offer, []Bundle) {
 	}
 	bundles := append([]Bundle(nil), q1Bundles...)
 	for i := range bundles {
-		bundles[i].RequiredOffers = append([]string(nil), q1Bundles[i].RequiredOffers...)
+		bundles[i].RequiredOffers = append(make([]string, 0, len(q1Bundles[i].RequiredOffers)), q1Bundles[i].RequiredOffers...)
 	}
 	return offers, bundles
 }
