@@ -93,7 +93,7 @@ export type StudioPack = {
   updated: string
 }
 
-export type PageId = 'overview' | 'onboarding' | 'campaigns' | 'studio' | 'billing' | 'offers' | 'settings'
+export type PageId = 'overview' | 'onboarding' | 'campaigns' | 'studio' | 'billing' | 'offers' | 'engagements' | 'settings'
 
 export type Balance = {
   account_id: string
@@ -221,4 +221,67 @@ export type ConversationQueueItem = {
     created_at_unix: number
   }
   drafts: ConversationDraft[]
+}
+
+
+export type EngagementOffer = '27' | '28' | '29' | '30' | '31' | '32' | '33' | '34'
+
+export type EngagementPlan = {
+  tenant_id: string
+  engagement_id: string
+  offer: EngagementOffer
+  version: number
+  object_key: string
+  sha256: string
+  media_type: string
+  status: string
+}
+
+export type EngagementDocument = {
+  schema_version: string
+  tenant_id: string
+  engagement_id: string
+  offer: EngagementOffer
+  title: string
+  scope: string
+  requested_outcome: string
+  commercial_status: 'source-only-unpriced'
+  delivery_mode: 'plan-only'
+  mandatory_controls: string[]
+  prohibited_actions: string[]
+  approval_requirement: string
+  acceptance_gate: string
+}
+
+export type EngagementReview = {
+  plan_sha256: string
+  reviewer: string
+  decision: 'approved' | 'rejected'
+  reason: string
+  reviewed_at_unix: number
+}
+
+export type EngagementSnapshot = {
+  tenant_id: string
+  engagement_id: string
+  offer: EngagementOffer
+  title: string
+  status: 'validating' | 'planning' | 'awaiting-approval' | 'approved' | 'rejected' | 'approval-expired'
+  commercial_status: 'source-only-unpriced'
+  delivery_mode: 'plan-only'
+  charges_enabled: false
+  external_actions_enabled: false
+  plan: EngagementPlan | null
+  document: EngagementDocument | null
+  review: EngagementReview | null
+  started_at: string
+  updated_at: string
+}
+
+export type EngagementStartInput = {
+  engagement_id: string
+  offer: EngagementOffer
+  title: string
+  scope: string
+  requested_outcome: string
 }

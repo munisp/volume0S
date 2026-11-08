@@ -2,15 +2,17 @@ import type {
   ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignSnapshot,
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace,
-  OfferJobSnapshot, ConversationQueueItem, ConversationDraft,
+  OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
 } from './types'
 
 export class ApiError extends Error {
   status: number
+  code: string
 
-  constructor(message: string, status = 0) {
+  constructor(message: string, status = 0, code = '') {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -105,6 +107,30 @@ export class VolumeOSApi {
     return this.request(this.orchestratorUrl, `/v1/offers/jobs/${encodeURIComponent(jobId)}/review`, {
       method: 'POST', body: { decision, reason, artifact_sha256: artifactSha256 },
     })
+  }
+
+  engagements() {
+    return this.request<{ engagements: EngagementSnapshot[] }>(this.orchestratorUrl, '/v1/engagements')
+  }
+
+  startEngagement(input: EngagementStartInput) {
+    return this.request<{ status: string; engagement_id: string; commercial_status: string; delivery_mode: string }>(
+      this.orchestratorUrl, '/v1/engagements', { method: 'POST', body: input },
+    )
+  }
+
+  engagement(engagementId: string) {
+    return this.request<EngagementSnapshot>(
+      this.orchestratorUrl, `/v1/engagements/${encodeURIComponent(engagementId)}`,
+    )
+  }
+
+  reviewEngagement(engagementId: string, decision: 'approved' | 'rejected', reason: string, planSha256: string) {
+    return this.request<{ status: string; engagement_id: string }>(
+      this.orchestratorUrl, `/v1/engagements/${encodeURIComponent(engagementId)}/review`, {
+        method: 'POST', body: { decision, reason, plan_sha256: planSha256 },
+      },
+    )
   }
 
   conversationQueue() {
@@ -259,9 +285,9 @@ export class VolumeOSApi {
       try { value = JSON.parse(text) } catch { throw new ApiError('The service returned an invalid JSON response.', response.status) }
     }
     if (!response.ok) {
-      const document = value as { error?: { message?: string }; detail?: string } | null
+      const document = value as { error?: { message?: string; code?: string }; detail?: string } | null
       const detail = document?.error?.message || document?.detail
-      throw new ApiError(detail || `Request failed with HTTP ${response.status}.`, response.status)
+      throw new ApiError(detail || `Request failed with HTTP ${response.status}.`, response.status, document?.error?.code ?? '')
     }
     return value as T
   }
