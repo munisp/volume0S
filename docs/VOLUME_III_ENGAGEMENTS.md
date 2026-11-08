@@ -27,6 +27,12 @@ The workflow moves through `validating` → `planning` → `awaiting-approval`, 
 
 A later implementation request must separately define approved commercial terms, least-privilege provider connectors, data controls, acceptance tests, and another human gate before any external action.
 
+## Operator PWA
+
+The console's **Engagements** workspace exposes the complete plan-review loop for Offers 27–34: authenticated queue and detail reads, engagement creation, mandatory-control and exact-JSON inspection, and approval or rejection of the currently displayed plan digest. The interface handles pending, empty, disconnected, failed, stale-plan, approved, rejected, and expired states without substituting mock engagements or enabling commercial and external-delivery actions.
+
+Run `npm run build` and `npm run lint` under `apps/console`. Component interaction verification covers creation payloads, both review decisions, exact digest binding, stale-plan reload, disconnected operation, pending plans, terminal reviews, and expiry. Production PWA generation and responsive browser interaction are verified separately from live Temporal/S3 acceptance.
+
 ## Source verification
 
 Run the orchestrator and offer-worker Python test suites. The engagement tests cover deterministic plans, tenant object boundaries, digest validation, all eight offer-control sets, invalid jobs, invalid states, stale digests, reviewer identity, tenant isolation, RBAC, and rejection of injected financial fields. These are source-level tests, not a live Temporal/S3 staging acceptance result.

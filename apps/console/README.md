@@ -1,6 +1,6 @@
 # VolumeOS M1 Console
 
-Responsive, installable operator console for the implemented M1 tenancy, commercial catalog, campaign-approval, Shopfront Studio QA, and outbound-safety contracts.
+Responsive, installable operator console for the implemented M1 tenancy, commercial catalog, campaign-approval, Shopfront Studio QA, outbound-safety, and Volume III plan-only engagement contracts.
 
 The unauthenticated console is explicitly a **product preview**. Its tenant, campaign, Studio, and offer records are illustrative. Business mutations are disabled until the required runtime APIs and an authenticated tenant session are available. Preview campaign and Studio records are removed when authentication succeeds; the console never enables workflow actions against them.
 
@@ -70,6 +70,13 @@ Implemented orchestrator calls:
 - `GET` and `POST /v1/studio/packs`
 - `GET /v1/studio/packs/{id}/assets`
 - `POST /v1/studio/packs/{id}/review`
+- `GET` and `POST /v1/offers/jobs`
+- `POST /v1/offers/jobs/{id}/review`
+- `GET` and `POST /v1/engagements`
+- `GET /v1/engagements/{id}`
+- `POST /v1/engagements/{id}/review`
+
+The Engagements workspace supports Offers 27–34. It creates plan-only engagements, reads the authenticated tenant queue, displays the generated controls and exact plan JSON, and submits approval or rejection with the currently displayed plan SHA-256. Pending, disconnected, empty, failed, stale-plan, approved, rejected, and expired states are explicit. Unlike the unauthenticated product preview, this workspace never substitutes illustrative engagements or plans. Approval does not enable pricing, charges, subscriptions, external integrations, or production delivery.
 
 The console reads live campaign and Studio state from the orchestrator's Temporal-backed feeds, refreshes after mutations and while visible online, and disables actions when current state is unavailable. Studio review loads actual QA images through short-lived signed URLs, with an explicit refresh action for failed or expired URLs. Approval submits the current manifest SHA-256 only after every image loads; the service and workflow validate the same hash again before delivery. These controls do not bypass Temporal approval or provider policy checks, and source-level tests are not proof of a deployed integration.
 
