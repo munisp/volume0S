@@ -36,3 +36,17 @@ Run `npm run build` and `npm run lint` under `apps/console`. Component interacti
 ## Source verification
 
 Run the orchestrator and offer-worker Python test suites. The engagement tests cover deterministic plans, tenant object boundaries, digest validation, all eight offer-control sets, invalid jobs, invalid states, stale digests, reviewer identity, tenant isolation, RBAC, and rejection of injected financial fields. These are source-level tests, not a live Temporal/S3 staging acceptance result.
+
+## Opt-in local service acceptance
+
+`apps/core/svc-orchestrator/tests/test_engagement_acceptance.py` contains two opt-in integration tests. The HTTP test exercises the production FastAPI routes, RS256 tokens fetched from a local JWKS HTTP endpoint, the real Temporal test server and engagement worker, and an HTTP S3-compatible Moto service. It verifies plan and manifest bytes, exact-digest approval and rejection, stale-digest rejection, OIDC reviewer identity, RBAC, cross-tenant direct-read non-disclosure, terminal-state enforcement, and the absence of additional objects or external actions after review. A separate fresh-server test starts the real engagement worker, awaits workflow completion so Temporal time skipping fires the actual 30-day timer, and verifies the terminal `approval-expired` state, stored plan digest, absent review, and disabled commercial/external actions.
+
+Install the orchestrator's test and acceptance dependencies, then run:
+
+```bash
+cd apps/core/svc-orchestrator
+VOLUMEOS_ENGAGEMENT_ACCEPTANCE=1 PYTHONPATH=. \
+  python3 -m pytest tests/test_engagement_acceptance.py -q
+```
+
+The Python SDK downloads its pinned Temporal test server on first use. Set `TEMPORAL_TEST_SERVER_DOWNLOAD_DIR` to reuse a download directory across runs, or `TEMPORAL_TEST_SERVER_PATH` to use an existing compatible executable. Moto emulates S3 over local HTTP; it is not MinIO, a deployed object store, or staging. These opt-in tests are skipped during ordinary unit-test runs and do not require credentials, a cluster, commercial configuration, or external providers. The Java test server used locally returns `UNIMPLEMENTED` for `ListWorkflowExecutions`; the HTTP test therefore emits an explicit warning and skips list-route assertions when visibility is unavailable. Tenant-isolated direct reads remain enforced and tested, but list-route acceptance still requires a visibility-enabled environment. Passing these tests is local service-integration evidence only—not live staging or production acceptance.
