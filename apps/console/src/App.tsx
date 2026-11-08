@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import type { User } from 'oidc-client-ts'
 import {
   Activity, ArrowRight, BadgeCheck, Ban, Check, CheckCircle2, ChevronRight,
-  CircleAlert, Clock3, CloudOff, Download, FileCheck2, Image as ImageIcon,
+  CircleAlert, ClipboardCheck, Clock3, CloudOff, Download, FileCheck2, Image as ImageIcon,
   LayoutDashboard, Loader2, LockKeyhole, LogIn, LogOut, PackageCheck, Plus,
   RefreshCw, Rocket, Send, Settings, ShieldCheck, ShoppingBag, Store,
   UserRoundCheck, WalletCards, Wifi, X, type LucideIcon,
@@ -15,6 +15,7 @@ import type { Bundle, Campaign, Offer, PageId, StudioAsset, StudioPack, Tenant }
 import { usePwa } from './hooks/usePwa'
 import { BillingSection } from './sections/BillingSection'
 import { OfferOperationsSection } from './sections/OfferOperationsSection'
+import { EngagementOperationsSection } from './sections/EngagementOperationsSection'
 
 const navigation: { id: PageId; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -23,6 +24,7 @@ const navigation: { id: PageId; label: string; icon: LucideIcon }[] = [
   { id: 'studio', label: 'Studio QA', icon: ImageIcon },
   { id: 'billing', label: 'Money & billing', icon: WalletCards },
   { id: 'offers', label: 'Offers', icon: ShoppingBag },
+  { id: 'engagements', label: 'Engagements', icon: ClipboardCheck },
 ]
 
 type ModalId = 'tenant' | 'workspace' | 'campaign' | 'pack' | 'subscription' | 'suspension' | 'suppression' | null
@@ -432,6 +434,7 @@ function App() {
         {page === 'studio' && <Studio packs={packs} selected={selectedPack} onSelect={setSelectedPack} connected={workflowFeedReady} busy={busy || feedsLoading} loading={feedsLoading} feedError={feedsError} onRefresh={refreshWorkflows} onNew={() => setModal('pack')} onReview={reviewPack} qaAssets={qaAssets} qaLoading={qaLoading} qaError={qaError} qaImageError={qaImageError} qaManifestReady={qaManifestReady} qaReviewReady={qaReviewReady} onQaLoad={id => setLoadedQaAssets(current => ({ ...current, [id]: true }))} onQaError={() => setQaImageError('One or more QA images could not be loaded. Approval is disabled; refresh the signed asset URLs or reject the pack.')} onQaRefresh={() => setQaReloadToken(current => current + 1)} />}
         {page === 'billing' && <BillingSection api={api} connected={tenantConnected && api.orchestratorConfigured} platform={liveTenant?.id === 'platform'} />}
         {page === 'offers' && <><Offers offers={offers} bundles={bundles} live={offersLive} connected={tenantConnected} onSubscribe={(offer, tier) => { setSelectedOffer({ offer, tier }); setModal('subscription') }} /><OfferOperationsSection api={api} connected={tenantConnected && api.orchestratorConfigured} conversationsConnected={tenantConnected && api.conversationsConfigured} notify={(kind, message) => setToast({ kind, message })} /></>}
+        {page === 'engagements' && <EngagementOperationsSection api={api} connected={tenantConnected && api.orchestratorConfigured} notify={(kind, message) => setToast({ kind, message })} />}
         {page === 'settings' && <SettingsPage config={config} user={user} tenant={tenant} connected={tenantConnected} pwa={pwa} busy={busy} onInstall={install} onSignIn={signIn} onSignOut={signOut} onModal={setModal} />}
       </main>
 
