@@ -16,13 +16,14 @@ class TemporalWorkflows:
         self.client = client
 
     async def ready(self) -> None:
-        await self.client.workflow_service.get_system_info()
+        if not await self.client.service_client.check_health():
+            raise RuntimeError("Temporal frontend health check failed")
 
     async def start(self, workflow_type: str, argument: dict[str, Any],
                     workflow_id: str, task_queue: str) -> None:
         await self.client.start_workflow(
             workflow_type, argument, id=workflow_id, task_queue=task_queue,
-            id_reuse_policy=WorkflowIDReusePolicy.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
         )
 
     async def query(self, workflow_id: str, run_id: str | None = None) -> dict[str, Any]:

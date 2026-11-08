@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9", "pytest-asyncio>=0.25,<1"]
+acceptance = ["moto[server]>=5,<6"]
 
 [tool.setuptools]
 py-modules = ["main", "auth", "assets", "workflows"]

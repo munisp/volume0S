@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import json
 from datetime import datetime, timezone
 
@@ -163,7 +165,8 @@ async def test_run_applies_only_the_digest_bound_terminal_decision(monkeypatch, 
     async def wait_condition(predicate, **_options):
         instance.review(review(instance.plan, decision=decision))
         assert predicate()
-        return True
+        # Temporal returns None after a successful condition wait.
+        return None
 
     monkeypatch.setattr("engagements.workflow.now", lambda: datetime(2026, 11, 8, tzinfo=timezone.utc))
     monkeypatch.setattr("engagements.workflow.execute_activity", execute_activity)
@@ -198,3 +201,22 @@ def test_s3_plan_store_rechecks_content_and_writes_tenant_manifest():
     tampered = type(generated)(artifact=generated.artifact, document=generated.document | {"offer": "34"})
     with pytest.raises(OfferError):
         store.put(tampered)
+
+
+@pytest.mark.asyncio
+async def test_run_marks_only_actual_condition_timeout_as_expired(monkeypatch):
+    instance = EngagementWorkflow()
+
+    async def execute_activity(activity, activity_job, **_options):
+        return new_engagement_plan(activity_job)
+
+    async def wait_condition(_predicate, **_options):
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("engagements.workflow.now", lambda: datetime(2026, 11, 8, tzinfo=timezone.utc))
+    monkeypatch.setattr("engagements.workflow.execute_activity", execute_activity)
+    monkeypatch.setattr("engagements.workflow.wait_condition", wait_condition)
+    with pytest.raises(ApplicationError, match="approval expired"):
+        await instance.run(job())
+    assert instance.status == "approval-expired"
+    assert instance.review_decision is None

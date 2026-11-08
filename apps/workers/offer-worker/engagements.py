@@ -13,10 +13,14 @@ import json
 import os
 from typing import Any
 
-import boto3
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
+
+# S3 is used only by the activity. Import it outside Temporal's deterministic
+# workflow sandbox so worker preparation never evaluates the HTTP client stack.
+with workflow.unsafe.imports_passed_through():
+    import boto3
 
 from common import OfferError, canonical, identifier, sha256
 
@@ -271,11 +275,12 @@ class EngagementWorkflow:
         self.plan = generated.artifact
         self.document = generated.document
         self.status = "awaiting-approval"
-        decided = await workflow.wait_condition(
-            lambda: self.review_decision is not None,
-            timeout=timedelta(days=30),
-        )
-        if not decided:
+        try:
+            await workflow.wait_condition(
+                lambda: self.review_decision is not None,
+                timeout=timedelta(days=30),
+            )
+        except asyncio.TimeoutError:
             self.status = "approval-expired"
             self.updated_at = workflow.now().isoformat()
             raise ApplicationError("engagement plan approval expired", non_retryable=True)
