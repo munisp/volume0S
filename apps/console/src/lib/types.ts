@@ -25,20 +25,23 @@ export type Bundle = {
   studio_packs_per_month: number
 }
 
+/** As svc-tenancy sends it (domain.go Tenant). The lifecycle is `state`; the console once read a `lifecycle` field
+ * that never existed, so every tenant showed as "required". */
 export type Tenant = {
   id: string
   name: string
   slug: string
-  lifecycle: string
+  state: 'prospect' | 'onboarding' | 'active' | 'paused' | 'offboarded'
   version: number
   outbound_suspended: boolean
-  suspension_reason?: string
   created_at?: string
   updated_at?: string
+  workspaces?: Workspace[] | null
+  subscriptions?: Subscription[] | null
 }
 
-export type Workspace = { id: string; tenant_id: string; name: string }
-export type Subscription = { id: string; tenant_id: string; offer: string; tier: string; status: string }
+export type Workspace = { id: string; tenant_id: string; name: string; created_at?: string }
+export type Subscription = { id: string; tenant_id: string; offer: string; tier: string; created_at?: string }
 
 export type CampaignStatus = 'drafting' | 'awaiting_approval' | 'approved' | 'reserving' | 'dispatching' | 'settling' | 'completed' | 'approval_timed_out' | 'failed' | 'cancelled'
 export type StudioStatus = 'generating' | 'awaiting_qa' | 'approved' | 'rejecting' | 'rejected' | 'delivering' | 'delivered' | 'qa_timed_out' | 'failed' | 'cancelled'
@@ -93,7 +96,6 @@ export type StudioPack = {
   updated: string
 }
 
-export type PageId = 'overview' | 'onboarding' | 'campaigns' | 'studio' | 'billing' | 'offers' | 'engagements' | 'settings'
 
 export type Balance = {
   account_id: string
@@ -266,7 +268,10 @@ export type EngagementSnapshot = {
   engagement_id: string
   offer: EngagementOffer
   title: string
-  status: 'validating' | 'planning' | 'awaiting-approval' | 'approved' | 'rejected' | 'approval-expired'
+  status: 'validating' | 'planning' | 'awaiting-approval' | 'approved' | 'rejected' | 'approval-expired' | 'failed' | 'cancelled'
+  /** Set by the orchestrator when the workflow ended without finishing (status then reads failed/cancelled). */
+  error?: string | null
+  stalled_status?: string | null
   commercial_status: 'source-only-unpriced'
   delivery_mode: 'plan-only'
   charges_enabled: false

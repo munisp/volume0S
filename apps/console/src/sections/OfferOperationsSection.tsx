@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import type { ReactNode } from 'react'
+import { KindStatus, Status } from '../components/ui'
 import { Ban, CalendarCheck, Check, CircleAlert, Loader2, MessageSquareText, RefreshCw, Send, ShieldCheck } from 'lucide-react'
 import { ApiError, VolumeOSApi } from '../lib/api'
 import type { ConversationQueueItem, OfferJobSnapshot } from '../lib/types'
@@ -8,23 +10,32 @@ type Props = {
   connected: boolean
   conversationsConnected: boolean
   notify: (kind: 'success' | 'error' | 'info', message: string) => void
+  /** Which part this page shows: the offer jobs (03/05/07/08) or the AI front desk (04). */
+  show?: 'jobs' | 'front-desk'
+  initialJobId?: string
+  onSelectJob?: (jobId: string) => void
+  canStart?: boolean
+  canReview?: boolean
+  roleNote?: (action: 'start' | 'review') => ReactNode
 }
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The operation could not be completed.'
 }
 
+/** Offer-job statuses use the console-wide vocabulary; front-desk statuses keep their own small map. */
 function Badge({ status }: { status: string }) {
-  const tone = ['released', 'sent', 'approved', 'active'].includes(status) ? 'status-active'
-    : ['failed', 'rejected', 'suppressed'].includes(status) ? 'status-danger'
-      : ['awaiting-review', 'requires-review'].includes(status) ? 'status-warning' : 'status-neutral'
-  return <span className={`status-badge ${tone}`}>{status.replaceAll('-', ' ').replaceAll('_', ' ')}</span>
+  const desk: Record<string, ['done' | 'failed' | 'needs-review' | 'stopped' | 'running', string]> = {
+    'requires-review': ['needs-review', 'Needs review'], sent: ['done', 'Sent'], active: ['running', 'Active'], suppressed: ['stopped', 'Suppressed'],
+  }
+  if (desk[status]) return <Status state={desk[status][0]} label={desk[status][1]} />
+  return <KindStatus kind="offer-job" status={status} />
 }
 
-export function OfferOperationsSection({ api, connected, conversationsConnected, notify }: Props) {
+export function OfferOperationsSection({ api, connected, conversationsConnected, notify, show = 'jobs', initialJobId, onSelectJob, canStart = true, canReview = true, roleNote }: Props) {
   const [jobs, setJobs] = useState<OfferJobSnapshot[]>([])
   const [conversations, setConversations] = useState<ConversationQueueItem[]>([])
-  const [selectedJobId, setSelectedJobId] = useState('')
+  const [selectedJobId, setSelectedJobId] = useState(initialJobId ?? '')
   const [selectedConversationId, setSelectedConversationId] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -42,8 +53,8 @@ export function OfferOperationsSection({ api, connected, conversationsConnected,
     setLoading(true)
     try {
       const [jobFeed, conversationFeed] = await Promise.all([
-        api.offerJobs(),
-        conversationsConnected ? api.conversationQueue() : Promise.resolve({ conversations: [] }),
+        show === 'jobs' ? api.offerJobs() : Promise.resolve({ jobs: [] }),
+        show === 'front-desk' && conversationsConnected ? api.conversationQueue() : Promise.resolve({ conversations: [] }),
       ])
       setJobs(jobFeed.jobs)
       setConversations(conversationFeed.conversations)
@@ -56,7 +67,7 @@ export function OfferOperationsSection({ api, connected, conversationsConnected,
     } finally {
       setLoading(false)
     }
-  }, [api, connected, conversationsConnected])
+  }, [api, connected, conversationsConnected, show])
 
   useEffect(() => {
     const initial = window.setTimeout(() => void refresh(), 0)
@@ -146,21 +157,21 @@ export function OfferOperationsSection({ api, connected, conversationsConnected,
   }
 
   return <div className="page offer-operations-page">
-    <section className="page-heading split-heading"><div><p className="section-kicker">Delivery operations</p><h1 className="page-title">Review the artifact.<br />Release only the evidence.</h1><p className="heading-copy">Batch offers reserve prepaid value before execution and bind every review to an exact content digest. Front-desk replies require a separate approval before WhatsApp send.</p></div><div className="heading-actions"><button className="button button-secondary" onClick={() => void refresh()} disabled={!connected || loading}><RefreshCw className={loading ? 'spin' : ''} size={16} /> Refresh operations</button></div></section>
-    {feedError && <div className="feed-error" role="alert"><CircleAlert size={17} /><span>Live operations refresh failed; review and release actions must not rely on stale data. {feedError}</span></div>}
+    <section className="page-heading split-heading"><div><p className="section-kicker">{show === 'jobs' ? 'Services · 03 · 05 · 07 · 08' : 'Services · 04 AI Front Desk'}</p><h1 className="page-title">{show === 'jobs' ? 'Offer jobs' : 'Front desk'}</h1><p className="heading-copy">{show === 'jobs' ? 'Batch work for call scorecards, bookkeeping, compliance and funding packs. Funds are reserved before the job runs; the finished artifact is released only after a person approves its exact digest.' : 'WhatsApp enquiries answered with AI-drafted replies. Each reply needs a person\'s approval, and sending is a separate step.'}</p></div><div className="heading-actions"><button className="button button-secondary" onClick={() => void refresh()} disabled={!connected || loading}><RefreshCw className={loading ? 'spin' : ''} size={16} /> Refresh</button></div></section>
+    {feedError && <div className="feed-error" role="alert"><CircleAlert size={17} /><span>The list didn't load, so review and release are paused. {feedError}</span></div>}
 
-    <section className="section-block">
-      <div className="section-heading"><div><p className="section-kicker">Offers 03 · 05 · 07 · 08</p><h2>Prepaid batch workflows</h2></div><span className="data-label">Temporal · offers-v1</span></div>
+    {show === 'jobs' && <section className="section-block">
+      <div className="section-heading"><div><p className="section-kicker">Offers 03 · 05 · 07 · 08</p><h2>Prepaid batch workflows</h2></div></div>
       <div className="workspace-grid">
-        <section className="queue-panel"><div className="panel-heading"><h2>Offer jobs</h2><span>{jobs.length} in view</span></div><div className="queue-list">{jobs.map(job => <button key={job.job_id} className={`queue-item ${job.job_id === selectedJob?.job_id ? 'selected' : ''}`} onClick={() => setSelectedJobId(job.job_id)}><span className="queue-item-top"><strong>{job.job_id}</strong><Badge status={job.status} /></span><span>Offer {job.offer} · {job.approval_count} review{job.approval_count === 1 ? '' : 's'}</span><small>{job.artifact ? `Artifact ${job.artifact.sha256.slice(0, 12)}…` : 'Artifact pending'}</small></button>)}</div>{!jobs.length && <div className="empty-review"><p>{connected ? 'No offer jobs are present in this tenant.' : 'Connect an authenticated tenant to load offer workflows.'}</p></div>}</section>
+        <section className="queue-panel"><div className="panel-heading"><h2>Offer jobs</h2><span>{jobs.length} in view</span></div><div className="queue-list">{jobs.map(job => <button key={job.job_id} className={`queue-item ${job.job_id === selectedJob?.job_id ? 'selected' : ''}`} onClick={() => { setSelectedJobId(job.job_id); onSelectJob?.(job.job_id) }}><span className="queue-item-top"><strong>{job.job_id}</strong><Badge status={job.status} /></span><span>Offer {job.offer} · {job.approval_count} review{job.approval_count === 1 ? '' : 's'}</span><small>{job.artifact ? `Artifact ${job.artifact.sha256.slice(0, 12)}…` : 'Artifact pending'}</small></button>)}</div>{!jobs.length && <div className="empty-review"><p>{connected ? 'No offer jobs are present in this tenant.' : 'Connect an authenticated tenant to load offer workflows.'}</p></div>}</section>
         <section className="review-panel"><div className="review-header"><div><span className="data-label">Exact-artifact review</span><h2>{selectedJob?.job_id ?? 'No job selected'}</h2><p>{selectedJob ? `Offer ${selectedJob.offer} · ${selectedJob.approval_count} recorded` : 'Start a job below or refresh the tenant queue.'}</p></div>{selectedJob && <Badge status={selectedJob.status} />}</div>
-          {selectedJob && <><div className="release-facts"><div className="fact"><span>Prepaid reservation</span><strong>{new Intl.NumberFormat('en-NG', { style: 'currency', currency: selectedJob.currency }).format(selectedJob.amount_minor / 100)}</strong></div><div className="fact"><span>Required reviewers</span><strong>{selectedJob.offer === '08' ? '2 distinct analysts' : '1 reviewer'}</strong></div><div className="fact"><span>Object version</span><strong>{selectedJob.artifact ? `v${selectedJob.artifact.version}` : 'Pending'}</strong></div><div className="fact"><span>Release state</span><strong>{selectedJob.artifact?.status ?? 'Not created'}</strong></div></div><label className="field"><span>Current artifact SHA-256</span><input value={selectedJob.artifact?.sha256 ?? 'Artifact not yet available'} readOnly /></label><label className="field"><span>Review reason</span><textarea rows={3} value={reviewReason} onChange={event => setReviewReason(event.target.value)} /></label><div className="safety-actions"><button className="button button-primary" onClick={() => void reviewJob('approved')} disabled={!connected || busy || Boolean(feedError) || selectedJob.status !== 'awaiting-review' || !selectedJob.artifact || !reviewReason.trim()}><Check size={16} /> Approve exact artifact</button><button className="button button-danger-quiet" onClick={() => void reviewJob('rejected')} disabled={!connected || busy || Boolean(feedError) || selectedJob.status !== 'awaiting-review' || !selectedJob.artifact || !reviewReason.trim()}><Ban size={16} /> Reject artifact</button></div></>}
+          {selectedJob && <><div className="release-facts"><div className="fact"><span>Prepaid reservation</span><strong>{new Intl.NumberFormat('en-NG', { style: 'currency', currency: selectedJob.currency }).format(selectedJob.amount_minor / 100)}</strong></div><div className="fact"><span>Required reviewers</span><strong>{selectedJob.offer === '08' ? '2 distinct analysts' : '1 reviewer'}</strong></div><div className="fact"><span>Object version</span><strong>{selectedJob.artifact ? `v${selectedJob.artifact.version}` : 'Pending'}</strong></div><div className="fact"><span>Release state</span><strong>{selectedJob.artifact?.status ?? 'Not created'}</strong></div></div><label className="field"><span>Current artifact SHA-256</span><input value={selectedJob.artifact?.sha256 ?? 'Artifact not yet available'} readOnly /></label><label className="field"><span>Review reason</span><textarea rows={3} value={reviewReason} onChange={event => setReviewReason(event.target.value)} /></label>{selectedJob.status === 'failed' && <div className="feed-error" role="status"><CircleAlert size={17} /><span>This job failed{(selectedJob as { stalled_status?: string }).stalled_status ? ` while ${(selectedJob as { stalled_status?: string }).stalled_status!.replaceAll('-', ' ')}` : ''}. Any reserved funds are released by the workflow; start a new job to try again.</span></div>}{canReview ? <div className="safety-actions"><button className="button button-primary" onClick={() => void reviewJob('approved')} disabled={!connected || busy || Boolean(feedError) || selectedJob.status !== 'awaiting-review' || !selectedJob.artifact || !reviewReason.trim()}><Check size={16} /> Approve exact artifact</button><button className="button button-danger-quiet" onClick={() => void reviewJob('rejected')} disabled={!connected || busy || Boolean(feedError) || selectedJob.status !== 'awaiting-review' || !selectedJob.artifact || !reviewReason.trim()}><Ban size={16} /> Reject artifact</button></div> : selectedJob.status === 'awaiting-review' ? roleNote?.('review') : null}</>}
         </section>
       </div>
-      <form onSubmit={startJob} className="approval-form"><div className="form-grid"><label className="field"><span>Offer</span><select name="offer" defaultValue="08" required><option value="03">03 · Call scorecard</option><option value="05">05 · Accounting export</option><option value="07">07 · Compliance paperwork</option><option value="08">08 · Funding pack</option></select></label><label className="field"><span>Job ID</span><input name="job_id" placeholder="funding-oct-01" pattern="[a-zA-Z0-9][a-zA-Z0-9._:-]*" required /></label></div><div className="form-grid"><label className="field"><span>Prepaid amount (NGN)</span><input name="amount" type="number" min="0.01" step="0.01" required /></label><label className="field"><span>Provider estimate (NGN)</span><input name="cost_estimate" type="number" min="0.01" step="0.01" required /></label><label className="field"><span>Job AI ceiling (NGN)</span><input name="job_ceiling" type="number" min="0.01" step="0.01" required /></label></div><label className="field"><span>Provider payload (JSON object; budget fields are added above)</span><textarea name="payload" rows={5} defaultValue="{}" required /></label><p className="body-copy">The worker validates offer-specific source keys, model versions, evidence, and registry fields. The API never accepts a tenant ID from this form.</p><button className="button button-primary" disabled={!connected || busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Start approval-gated offer job</button></form>
-    </section>
+      {!canStart ? roleNote?.('start') : <form onSubmit={startJob} className="approval-form"><div className="form-grid"><label className="field"><span>Offer</span><select name="offer" defaultValue="08" required><option value="03">03 · Call scorecard</option><option value="05">05 · Accounting export</option><option value="07">07 · Compliance paperwork</option><option value="08">08 · Funding pack</option></select></label><label className="field"><span>Job ID</span><input name="job_id" placeholder="funding-oct-01" pattern="[a-zA-Z0-9][a-zA-Z0-9._:-]*" required /></label></div><div className="form-grid"><label className="field"><span>Prepaid amount (NGN)</span><input name="amount" type="number" min="0.01" step="0.01" required /></label><label className="field"><span>Provider estimate (NGN)</span><input name="cost_estimate" type="number" min="0.01" step="0.01" required /></label><label className="field"><span>Job AI ceiling (NGN)</span><input name="job_ceiling" type="number" min="0.01" step="0.01" required /></label></div><label className="field"><span>Provider payload (JSON object; budget fields are added above)</span><textarea name="payload" rows={5} defaultValue="{}" required /></label><p className="body-copy">The worker validates offer-specific source keys, model versions, evidence, and registry fields. The API never accepts a tenant ID from this form.</p><button className="button button-primary" disabled={!connected || busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Start offer job</button></form>}
+    </section>}
 
-    <section className="section-block">
+    {show === 'front-desk' && <section className="section-block">
       <div className="section-heading"><div><p className="section-kicker">Offer 04 · AI Front Desk</p><h2>Conversation review and booking</h2></div><span className="data-label">Signed intake · redacted AI · approved send</span></div>
       {!conversationsConnected && <div className="connection-note"><CircleAlert size={17} /><span>Set conversationsApiUrl to enable the live front-desk queue. No preview conversation data is substituted.</span></div>}
       <div className="workspace-grid">
@@ -170,7 +181,7 @@ export function OfferOperationsSection({ api, connected, conversationsConnected,
             <div className="form-grid"><label className="field"><span>Booking slot ID</span><input value={slotId} onChange={event => setSlotId(event.target.value)} placeholder="slot-consult-01" /></label><label className="field"><span>Suppression reason</span><input value={suppressionReason} onChange={event => setSuppressionReason(event.target.value)} /></label></div><div className="safety-actions"><button className="button button-secondary" onClick={() => void book()} disabled={!conversationsConnected || busy || !slotId.trim() || selectedConversation.conversation.status !== 'active'}><CalendarCheck size={16} /> Hold and confirm booking</button><button className="button button-danger-quiet" onClick={() => void suppress()} disabled={!conversationsConnected || busy || !suppressionReason.trim() || selectedConversation.conversation.status !== 'active'}><ShieldCheck size={16} /> Suppress conversation</button></div></>}
         </section>
       </div>
-    </section>
+    </section>}
     <div className="connection-note"><MessageSquareText size={17} /><span>Source controls are verified locally. Actual Temporal execution, WhatsApp delivery, AI generation, booking, registry access, and object release still require their configured staging providers.</span></div>
   </div>
 }

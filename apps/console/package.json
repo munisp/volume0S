@@ -10,7 +10,8 @@
     "prebuild": "npm run icons",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/lib/*.test.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

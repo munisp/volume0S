@@ -4,15 +4,19 @@ import type {
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
 } from './types'
+import { plainError } from './messages.ts'
 
+/** A refusal or failure, with a message a person can act on. `detail` keeps the server's own text for diagnostics. */
 export class ApiError extends Error {
   status: number
   code: string
+  detail: string
 
   constructor(message: string, status = 0, code = '') {
-    super(message)
+    super(plainError({ message, status, code }))
     this.status = status
     this.code = code
+    this.detail = message
   }
 }
 
@@ -41,6 +45,11 @@ export class VolumeOSApi {
 
   createTenant(name: string, slug: string) {
     return this.request<Tenant>(this.coreUrl, '/v1/tenants/current', { method: 'POST', body: { name, slug } })
+  }
+
+  /** Version-guarded: if the record changed since it was read, the server refuses (409) instead of overwriting. */
+  transitionTenant(to: string, version: number, reason: string) {
+    return this.request<Tenant>(this.coreUrl, '/v1/tenants/current/transitions', { method: 'POST', body: { to, version, reason } })
   }
 
   createWorkspace(name: string) {
@@ -282,7 +291,10 @@ export class VolumeOSApi {
     const text = await response.text()
     let value: unknown = null
     if (text) {
-      try { value = JSON.parse(text) } catch { throw new ApiError('The service returned an invalid JSON response.', response.status) }
+      try { value = JSON.parse(text) } catch {
+        // A stopped service answers through the gateway with an HTML error page, not JSON: report the outage itself.
+        throw new ApiError(response.ok ? 'The service sent an answer the console can\'t read.' : '', response.status)
+      }
     }
     if (!response.ok) {
       const document = value as { error?: { message?: string; code?: string }; detail?: string } | null

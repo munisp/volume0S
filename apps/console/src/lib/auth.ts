@@ -6,7 +6,9 @@ export class VolumeOSAuth {
 
   constructor(config: RuntimeConfig) {
     if (!oidcConfigured(config)) return
-    const redirectUri = `${window.location.origin}${window.location.pathname}`
+    // Always the site root (the address Keycloak knows); the page the person was on travels in the sign-in state, so
+    // every screen can have its own URL without registering each one as a redirect.
+    const redirectUri = `${window.location.origin}/`
     this.manager = new UserManager({
       authority: config.oidc.authority,
       client_id: config.oidc.clientId,
@@ -29,9 +31,9 @@ export class VolumeOSAuth {
     return current && !current.expired ? current.access_token : null
   }
 
-  async signIn() {
-    if (!this.manager) throw new Error('OIDC is not configured for this deployment.')
-    await this.manager.signinRedirect()
+  async signIn(returnTo = '/') {
+    if (!this.manager) throw new Error('Sign-in is not configured for this deployment.')
+    await this.manager.signinRedirect({ state: { returnTo: safePath(returnTo) } })
   }
 
   async completeSignIn(): Promise<User | null> {
@@ -43,5 +45,16 @@ export class VolumeOSAuth {
     return user
   }
 
+  /** Where to go after signing in: the page the person started from. */
+  static returnTo(user: User | null): string {
+    const state = user?.state as { returnTo?: unknown } | undefined
+    return typeof state?.returnTo === 'string' ? safePath(state.returnTo) : '/'
+  }
+
   async signOut() { await this.manager?.removeUser() }
+}
+
+/** Only same-site paths: never let a sign-in state send someone to another origin. */
+function safePath(value: string): string {
+  return /^\/(?!\/)[^\s]*$/.test(value) ? value : '/'
 }
