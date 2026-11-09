@@ -213,6 +213,7 @@ func respond(w http.ResponseWriter, r *http.Request, status int, value any, err 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff") // a browser must never treat an API answer as a page
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }

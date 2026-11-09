@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -85,5 +86,20 @@ func TestNamesRefuseHiddenCharacters(t *testing.T) {
 	tenant := request(t, handler, http.MethodPost, "/v1/tenants/current", "tenant-b", "super-operator", `{"name":"Bad‮name","slug":"bad-name"}`)
 	if tenant.Code == http.StatusCreated {
 		t.Fatalf("tenant name with a direction override was accepted")
+	}
+}
+
+// ZAP 2026-11-09: every API answer tells browsers not to guess its type.
+func TestAPIAnswersAreNosniff(t *testing.T) {
+	handler, _ := testServer(t)
+	createTenant(t, handler, "tenant-a")
+	for _, response := range []*httptest.ResponseRecorder{
+		request(t, handler, http.MethodGet, "/v1/tenants/current", "tenant-a", "reader", ""),
+		request(t, handler, http.MethodGet, "/v1/offers", "", "", ""),
+		request(t, handler, http.MethodPut, "/v1/suppressions", "tenant-a", "super-operator", `{"channel":"email","recipient":"bad","reason":"x"}`),
+	} {
+		if response.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Fatalf("missing nosniff on %d %s", response.Code, response.Body.String())
+		}
 	}
 }
