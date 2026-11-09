@@ -31,7 +31,7 @@ export function LandingPage() {
   const sellable = catalogue.offers.filter(offer => Number(offer.id) <= 8 && offer.tiers.length > 0)
   const built = catalogue.offers.filter(offer => Number(offer.id) <= 8 && offer.tiers.length === 0)
   const later = catalogue.offers.filter(offer => Number(offer.id) > 8)
-  const signInButton = (label: string, light = false) => <button className={`button landing-cta ${light ? 'light' : ''}`} onClick={() => void signIn('/')} disabled={!signInAvailable}>
+  const signInButton = (label: string, light = false) => <button className={`button landing-cta ${light ? 'light' : ''}`} onClick={() => void signIn(window.location.pathname + window.location.search)} disabled={!signInAvailable}>
     <LogIn size={15} /> {label}
   </button>
 
@@ -45,6 +45,7 @@ export function LandingPage() {
       </nav>
     </header>
 
+    <main id="main">
     <section className="landing-hero">
       <div className="landing-hero-copy">
         <p className="landing-eyebrow">The operating platform for the Naira Volume Playbook</p>
@@ -112,6 +113,7 @@ export function LandingPage() {
       {signInButton('Sign in', true)}
     </section>
 
+    </main>
     <footer className="landing-foot"><span>VolumeOS</span><span>Operating platform for the Naira Volume Playbook</span></footer>
   </div>
 }
