@@ -109,7 +109,7 @@ def test_balance_and_topup_are_derived_from_authenticated_tenant(money_services)
     assert balance.json()["available_minor"] == "125000"
     topup = client.post("/v1/billing/topups/paystack/topup-1", headers=auth(), json={
         "amount_minor": 125000, "currency": "NGN", "customer_email": "owner@example.com",
-        "redirect_url": "https://console.example/billing/callback",
+        "redirect_url": "https://testserver/billing/callback",  # must be this site (BB-07)
     })
     assert topup.status_code == 201
     assert money.calls[0] == ("balance", "tenant-a", "NGN")

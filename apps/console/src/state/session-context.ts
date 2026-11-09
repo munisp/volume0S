@@ -13,6 +13,8 @@ export type Session = {
   ready: boolean
   config: RuntimeConfig
   signInAvailable: boolean
+  /** True when a session existed but could no longer be renewed: show "sign in again", not a fresh landing. */
+  sessionEnded: boolean
   user: User | null
   roles: Roles
   persona: Persona

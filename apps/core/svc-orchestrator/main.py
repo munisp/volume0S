@@ -6,6 +6,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from pathlib import PurePosixPath
+from urllib.parse import urlsplit
 from typing import Annotated, Any, Literal
 
 import boto3
@@ -13,7 +14,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Path, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from temporalio.client import Client
 from temporalio.exceptions import TemporalError, WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
@@ -28,15 +29,40 @@ SHA256_PATTERN = r"^[0-9a-f]{64}$"
 ResourceId = Annotated[str, Path(pattern=ID_PATTERN)]
 
 
+# Invisible characters that have no place in names, ids or free text: C0/C1 controls (except tab and line breaks),
+# DEL, and the bidirectional overrides that make text display differently from what it says.
+_HIDDEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
+def _walk_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _walk_strings(item)
+    elif isinstance(value, BaseModel):
+        yield from _walk_strings(dict(value))
+
+
 class InputModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    @model_validator(mode="after")
+    def no_hidden_characters(self):
+        for text in _walk_strings(dict(self)):
+            if _HIDDEN.search(text):
+                raise ValueError("text contains control or direction-override characters")
+        return self
 
 
 class CampaignStart(InputModel):
     campaign_id: str = Field(pattern=ID_PATTERN)
     cycle_id: str = Field(pattern=ID_PATTERN)
     brief: str = Field(min_length=1, max_length=10_000)
-    amount_minor: int = Field(gt=0, le=1_000_000_000_000)
+    amount_minor: StrictInt = Field(gt=0, le=1_000_000_000_000)
     currency: Literal["NGN", "USD"] = "NGN"
 
 
@@ -64,7 +90,7 @@ class StudioReview(InputModel):
 class OfferStart(InputModel):
     job_id: str = Field(pattern=ID_PATTERN)
     offer: Literal["03", "05", "07", "08"]
-    amount_minor: int = Field(gt=0, le=1_000_000_000_000)
+    amount_minor: StrictInt = Field(gt=0, le=1_000_000_000_000)
     currency: Literal["NGN", "USD"] = "NGN"
     payload: dict[str, Any]
 
@@ -74,6 +100,8 @@ class OfferStart(InputModel):
             value = self.payload.get(field)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{field} must be positive exact minor units")
+        if self.payload["job_ceiling_minor"] < self.payload["cost_estimate_minor"]:
+            raise ValueError("job_ceiling_minor must be at least cost_estimate_minor")
         return self
 
 
@@ -108,10 +136,10 @@ class BillingCycleStart(InputModel):
     offer: Literal["01", "02", "03", "04", "05", "06", "07", "08"]
     cycle: str = Field(pattern=r"^\d{4}-(?:0[1-9]|1[0-2])$")
     issue_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
-    retainer_minor: int = Field(gt=0, le=1_000_000_000_000)
-    setup_minor: int = Field(default=0, ge=0, le=1_000_000_000_000)
-    usage_minor: int = Field(default=0, ge=0, le=1_000_000_000_000)
-    tax_minor: int = Field(default=0, ge=0, le=1_000_000_000_000)
+    retainer_minor: StrictInt = Field(gt=0, le=1_000_000_000_000)
+    setup_minor: StrictInt = Field(default=0, ge=0, le=1_000_000_000_000)
+    usage_minor: StrictInt = Field(default=0, ge=0, le=1_000_000_000_000)
+    tax_minor: StrictInt = Field(default=0, ge=0, le=1_000_000_000_000)
     currency: Literal["NGN", "USD"] = "NGN"
     seller: PartyInput
     buyer: PartyInput
@@ -119,7 +147,7 @@ class BillingCycleStart(InputModel):
 
 
 class TopupStart(InputModel):
-    amount_minor: int = Field(gt=0, le=1_000_000_000_000)
+    amount_minor: StrictInt = Field(gt=0, le=1_000_000_000_000)
     currency: Literal["NGN", "USD"] = "NGN"
     customer_email: str = Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+$")
     redirect_url: str = Field(min_length=12, max_length=1_024, pattern=r"^https://")
@@ -145,7 +173,7 @@ class PartnerContractStart(InputModel):
     contract_id: str = Field(pattern=ID_PATTERN)
     partner_id: str = Field(pattern=ID_PATTERN)
     offer: Literal["01", "02", "03", "04", "05", "06", "07", "08"]
-    basis_points: int = Field(ge=0, le=10_000)
+    basis_points: StrictInt = Field(ge=0, le=10_000)
     effective_from: datetime
     effective_to: datetime | None = None
 
@@ -197,6 +225,18 @@ async def current_claims(request: Request) -> Claims:
         raise error("Valid OIDC credentials and tenant scope are required.", 401, "unauthorized") from exc
 
 
+def need(*roles: str):
+    """Authenticate and check the role as a dependency. FastAPI resolves dependencies before it validates the body,
+    so a caller without the role is refused (403) before any 400 can describe the request format."""
+    async def dependency(request: Request) -> Claims:
+        claims = await current_claims(request)
+        if not any(claims.can(role) for role in roles):
+            needed = " or ".join(roles)
+            raise error(f"Required role: {needed}.", 403, "forbidden")
+        return claims
+    return dependency
+
+
 def require(claims: Claims, role: str) -> None:
     if not claims.can(role):
         raise error(f"Required role: {role}.", 403, "forbidden")
@@ -233,8 +273,10 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return JSONResponse({"error": detail}, status_code=exc.status_code, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
-    async def invalid_request(_request: Request, _exc: RequestValidationError):
-        return JSONResponse({"error": {"code": "invalid_request", "message": "Request fields are invalid."}}, status_code=400)
+    async def invalid_request(_request: Request, exc: RequestValidationError):
+        fields = sorted({".".join(str(part) for part in item.get("loc", ())[1:]) or "body" for item in exc.errors()})
+        message = f"Check these fields: {', '.join(fields)}." if fields else "Request fields are invalid."
+        return JSONResponse({"error": {"code": "invalid_request", "message": message, "fields": fields}}, status_code=400)
 
     @app.exception_handler(RPCError)
     async def workflow_rpc_error(_request: Request, exc: RPCError):
@@ -268,8 +310,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return app.state.money
 
     @app.get("/v1/campaigns")
-    async def campaigns(claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def campaigns(claims: Claims = Depends(need("reader"))):
         snapshots = await app.state.workflows.list(f"campaign:{claims.tenant_id}:")
         for snapshot in snapshots:
             if snapshot.get("tenant_id") != claims.tenant_id:
@@ -277,8 +318,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"campaigns": sorted_snapshots(snapshots)}
 
     @app.post("/v1/campaigns", status_code=202)
-    async def start_campaign(body: CampaignStart, claims: Claims = Depends(current_claims)):
-        require(claims, "delivery")
+    async def start_campaign(body: CampaignStart, claims: Claims = Depends(need("delivery"))):
         argument = body.model_dump() | {"tenant_id": claims.tenant_id}
         try:
             await app.state.workflows.start(
@@ -289,8 +329,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "campaign_id": body.campaign_id}
 
     @app.post("/v1/campaigns/{campaign_id}/approval", status_code=202)
-    async def approve_campaign(campaign_id: ResourceId, body: CampaignApproval, claims: Claims = Depends(current_claims)):
-        require(claims, "delivery")
+    async def approve_campaign(campaign_id: ResourceId, body: CampaignApproval, claims: Claims = Depends(need("delivery"))):
         workflow_id = f"campaign:{claims.tenant_id}:{campaign_id}"
         snapshot = await app.state.workflows.query(workflow_id)
         verify_snapshot(snapshot, claims, "campaign_id", campaign_id)
@@ -302,8 +341,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "campaign_id": campaign_id}
 
     @app.get("/v1/studio/packs")
-    async def studio_packs(claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def studio_packs(claims: Claims = Depends(need("reader"))):
         snapshots = await app.state.workflows.list(f"studio:{claims.tenant_id}:")
         for snapshot in snapshots:
             if snapshot.get("tenant_id") != claims.tenant_id:
@@ -311,8 +349,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"packs": sorted_snapshots(snapshots)}
 
     @app.post("/v1/studio/packs", status_code=202)
-    async def start_studio_pack(body: StudioStart, claims: Claims = Depends(current_claims)):
-        require(claims, "delivery")
+    async def start_studio_pack(body: StudioStart, claims: Claims = Depends(need("delivery"))):
         source = PurePosixPath(body.source_image)
         if (not body.source_image.startswith(f"{claims.tenant_id}/") or source.is_absolute()
                 or ".." in source.parts):
@@ -327,8 +364,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "pack_id": body.pack_id}
 
     @app.get("/v1/studio/packs/{pack_id}/assets")
-    async def studio_assets(pack_id: ResourceId, claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def studio_assets(pack_id: ResourceId, claims: Claims = Depends(need("reader"))):
         workflow_id = f"studio:{claims.tenant_id}:{pack_id}"
         snapshot = await app.state.workflows.query(workflow_id)
         verify_snapshot(snapshot, claims, "pack_id", pack_id)
@@ -347,8 +383,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"pack_id": pack_id, "manifest_sha256": manifest_sha256, "assets": assets}
 
     @app.post("/v1/studio/packs/{pack_id}/review", status_code=202)
-    async def review_studio_pack(pack_id: ResourceId, body: StudioReview, claims: Claims = Depends(current_claims)):
-        require(claims, "delivery")
+    async def review_studio_pack(pack_id: ResourceId, body: StudioReview, claims: Claims = Depends(need("delivery"))):
         if body.decision == "reject" and not body.reason:
             raise error("A rejection reason is required.", 400, "invalid_request")
         workflow_id = f"studio:{claims.tenant_id}:{pack_id}"
@@ -371,8 +406,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "pack_id": pack_id}
 
     @app.get("/v1/offers/jobs")
-    async def offer_jobs(claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def offer_jobs(claims: Claims = Depends(need("reader"))):
         snapshots = await app.state.workflows.list(f"offer:{claims.tenant_id}:")
         for snapshot in snapshots:
             if snapshot.get("tenant_id") != claims.tenant_id:
@@ -380,8 +414,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"jobs": sorted_snapshots(snapshots)}
 
     @app.post("/v1/offers/jobs", status_code=202)
-    async def start_offer_job(body: OfferStart, claims: Claims = Depends(current_claims)):
-        require(claims, "delivery")
+    async def start_offer_job(body: OfferStart, claims: Claims = Depends(need("delivery"))):
         argument = body.model_dump() | {"tenant_id": claims.tenant_id}
         try:
             await app.state.workflows.start(
@@ -392,16 +425,13 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "job_id": body.job_id}
 
     @app.get("/v1/offers/jobs/{job_id}")
-    async def offer_job(job_id: ResourceId, claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def offer_job(job_id: ResourceId, claims: Claims = Depends(need("reader"))):
         snapshot = await app.state.workflows.query(f"offer:{claims.tenant_id}:{job_id}")
         verify_snapshot(snapshot, claims, "job_id", job_id)
         return snapshot
 
     @app.post("/v1/offers/jobs/{job_id}/review", status_code=202)
-    async def review_offer_job(job_id: ResourceId, body: OfferReview, claims: Claims = Depends(current_claims)):
-        if not (claims.can("delivery") or claims.can("analyst")):
-            raise error("A delivery operator or analyst is required.", 403, "forbidden")
+    async def review_offer_job(job_id: ResourceId, body: OfferReview, claims: Claims = Depends(need("delivery", "analyst"))):
         workflow_id = f"offer:{claims.tenant_id}:{job_id}"
         snapshot = await app.state.workflows.query(workflow_id)
         verify_snapshot(snapshot, claims, "job_id", job_id)
@@ -418,8 +448,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "job_id": job_id}
 
     @app.get("/v1/engagements")
-    async def engagements(claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def engagements(claims: Claims = Depends(need("reader"))):
         snapshots = await app.state.workflows.list(f"engagement:{claims.tenant_id}:")
         for snapshot in snapshots:
             if snapshot.get("tenant_id") != claims.tenant_id:
@@ -427,8 +456,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"engagements": sorted_snapshots(snapshots)}
 
     @app.post("/v1/engagements", status_code=202)
-    async def start_engagement(body: EngagementStart, claims: Claims = Depends(current_claims)):
-        require(claims, "delivery")
+    async def start_engagement(body: EngagementStart, claims: Claims = Depends(need("delivery"))):
         argument = body.model_dump() | {"tenant_id": claims.tenant_id}
         try:
             await app.state.workflows.start(
@@ -443,18 +471,15 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         }
 
     @app.get("/v1/engagements/{engagement_id}")
-    async def engagement(engagement_id: ResourceId, claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def engagement(engagement_id: ResourceId, claims: Claims = Depends(need("reader"))):
         snapshot = await app.state.workflows.query(f"engagement:{claims.tenant_id}:{engagement_id}")
         verify_snapshot(snapshot, claims, "engagement_id", engagement_id)
         return snapshot
 
     @app.post("/v1/engagements/{engagement_id}/review", status_code=202)
     async def review_engagement(
-        engagement_id: ResourceId, body: EngagementReview, claims: Claims = Depends(current_claims),
+        engagement_id: ResourceId, body: EngagementReview, claims: Claims = Depends(need("delivery", "analyst")),
     ):
-        if not (claims.can("delivery") or claims.can("analyst")):
-            raise error("A delivery operator or analyst is required.", 403, "forbidden")
         workflow_id = f"engagement:{claims.tenant_id}:{engagement_id}"
         snapshot = await app.state.workflows.query(workflow_id)
         verify_snapshot(snapshot, claims, "engagement_id", engagement_id)
@@ -471,21 +496,22 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "engagement_id": engagement_id}
 
     @app.get("/v1/billing/balance/{currency}")
-    async def billing_balance(currency: Literal["NGN", "USD"], claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def billing_balance(currency: Literal["NGN", "USD"], claims: Claims = Depends(need("reader"))):
         return await money_services().balance(claims.tenant_id, currency)
 
     @app.post("/v1/billing/topups/{provider}/{reference}", status_code=201)
     async def start_topup(provider: Literal["paystack", "flutterwave", "moniepoint"], reference: ResourceId,
-                          body: TopupStart, claims: Claims = Depends(current_claims)):
-        if not (claims.can("client-owner") or claims.can("delivery")):
-            raise error("A client owner or delivery operator is required.", 403, "forbidden")
+                          body: TopupStart, request: Request, claims: Claims = Depends(need("client-owner", "delivery"))):
+        allowed = {origin.strip().rstrip("/") for origin in os.environ.get("TOPUP_REDIRECT_ORIGINS", "").split(",") if origin.strip()}
+        allowed = allowed or {f"https://{request.headers.get('host', '')}"}
+        target = urlsplit(body.redirect_url)
+        if f"{target.scheme}://{target.netloc}" not in allowed:
+            raise error("The return address must be on this site.", 400, "invalid_request")
         payload = body.model_dump() | {"amount_minor": str(body.amount_minor)}
         return await money_services().topup(claims.tenant_id, provider, reference, payload)
 
     @app.get("/v1/billing/cycles")
-    async def billing_cycles(claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def billing_cycles(claims: Claims = Depends(need("reader"))):
         snapshots = await app.state.workflows.list(f"billing:{claims.tenant_id}:")
         for snapshot in snapshots:
             if snapshot.get("tenant_id") != claims.tenant_id:
@@ -493,8 +519,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"cycles": sorted_snapshots(snapshots)}
 
     @app.post("/v1/billing/cycles", status_code=202)
-    async def start_billing_cycle(body: BillingCycleStart, claims: Claims = Depends(current_claims)):
-        require(claims, "sales")
+    async def start_billing_cycle(body: BillingCycleStart, claims: Claims = Depends(need("sales"))):
         argument = body.model_dump() | {
             "tenant_id": claims.tenant_id,
             # Pause/restore always reads a fresh optimistic tenancy version.
@@ -509,14 +534,12 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return {"status": "accepted", "subscription_id": body.subscription_id, "cycle": body.cycle}
 
     @app.get("/v1/billing/documents")
-    async def billing_documents(claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def billing_documents(claims: Claims = Depends(need("reader"))):
         return await money_services().documents(claims.tenant_id)
 
     @app.get("/v1/billing/documents/{kind}/{document_id}/pdf")
     async def billing_document_pdf(kind: Literal["invoice", "receipt"], document_id: ResourceId,
-                                   claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+                                   claims: Claims = Depends(need("reader"))):
         content, number = await money_services().document_pdf(claims.tenant_id, kind, document_id)
         return Response(
             content=content, media_type="application/pdf",
@@ -524,52 +547,44 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         )
 
     @app.get("/v1/billing/reports/ar-aging")
-    async def ar_aging_report(as_of: date | None = None, claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def ar_aging_report(as_of: date | None = None, claims: Claims = Depends(need("reader"))):
         report_date = as_of or datetime.now(timezone.utc).date()
         return await money_services().ar_aging(claims.tenant_id, report_date.isoformat())
 
     @app.post("/v1/billing/reports/ar-aging/exports")
-    async def export_ar_aging_report(body: ArExport, claims: Claims = Depends(current_claims)):
-        require(claims, "finance")
+    async def export_ar_aging_report(body: ArExport, claims: Claims = Depends(need("finance"))):
         return await money_services().export_ar_aging(claims.tenant_id, body.as_of.isoformat())
 
     @app.get("/v1/billing/reports/partner-share/{partner_id}")
-    async def partner_share_report(partner_id: ResourceId, start: date, end: date, claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def partner_share_report(partner_id: ResourceId, start: date, end: date, claims: Claims = Depends(need("reader"))):
         if end < start or (end - start).days > 3660:
             raise error("Statement period must be valid and no longer than ten years.", 400, "invalid_request")
         return await money_services().partner_statement(claims.tenant_id, partner_id, start.isoformat(), end.isoformat())
 
     @app.post("/v1/billing/reports/partner-share/{partner_id}/exports")
-    async def export_partner_share_report(partner_id: ResourceId, body: PartnerExport, claims: Claims = Depends(current_claims)):
-        require(claims, "finance")
+    async def export_partner_share_report(partner_id: ResourceId, body: PartnerExport, claims: Claims = Depends(need("finance"))):
         return await money_services().export_partner_statement(
             claims.tenant_id, partner_id, body.start.isoformat(), body.end.isoformat(),
         )
 
     @app.get("/v1/billing/reports/trial-balance/{currency}")
-    async def trial_balance_report(currency: Literal["NGN", "USD"], claims: Claims = Depends(current_claims)):
-        require(claims, "finance")
+    async def trial_balance_report(currency: Literal["NGN", "USD"], claims: Claims = Depends(need("finance"))):
         if claims.tenant_id != "platform":
             raise error("Platform finance scope is required.", 403, "forbidden")
         return await money_services().trial_balance(currency)
 
     @app.post("/v1/billing/reports/trial-balance/{currency}/exports")
-    async def export_trial_balance_report(currency: Literal["NGN", "USD"], claims: Claims = Depends(current_claims)):
-        require(claims, "finance")
+    async def export_trial_balance_report(currency: Literal["NGN", "USD"], claims: Claims = Depends(need("finance"))):
         if claims.tenant_id != "platform":
             raise error("Platform finance scope is required.", 403, "forbidden")
         return await money_services().export_trial_balance(currency)
 
     @app.post("/v1/billing/partner-contracts", status_code=201)
-    async def create_partner_contract(body: PartnerContractStart, claims: Claims = Depends(current_claims)):
-        require(claims, "finance")
+    async def create_partner_contract(body: PartnerContractStart, claims: Claims = Depends(need("finance"))):
         return await money_services().create_partner_contract(claims.tenant_id, body.model_dump(mode="json"))
 
     @app.get("/v1/billing/partner-contracts")
-    async def partner_contracts(partner_id: str | None = None, claims: Claims = Depends(current_claims)):
-        require(claims, "reader")
+    async def partner_contracts(partner_id: str | None = None, claims: Claims = Depends(need("reader"))):
         if partner_id is not None and not re.fullmatch(ID_PATTERN, partner_id):
             raise error("Invalid partner id.", 400, "invalid_request")
         return await money_services().partner_contracts(claims.tenant_id, partner_id)
@@ -577,9 +592,8 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     @app.get("/v1/billing/financial-exports/{kind}/{digest}")
     async def download_financial_export(
         kind: Literal["trial-balance", "ar-aging", "partner-share"],
-        digest: Annotated[str, Path(pattern=SHA256_PATTERN)], claims: Claims = Depends(current_claims),
+        digest: Annotated[str, Path(pattern=SHA256_PATTERN)], claims: Claims = Depends(need("reader")),
     ):
-        require(claims, "reader")
         content, export_digest = await money_services().financial_export(claims.tenant_id, kind, digest)
         return Response(
             content=content, media_type="application/json",
@@ -587,8 +601,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         )
 
     @app.get("/v1/billing/collection-suspense")
-    async def open_collection_suspense(claims: Claims = Depends(current_claims)):
-        require(claims, "finance")
+    async def open_collection_suspense(claims: Claims = Depends(need("finance"))):
         if claims.tenant_id != "platform":
             raise error("Platform finance scope is required.", 403, "forbidden")
         return await money_services().open_suspense()
@@ -596,9 +609,8 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     @app.post("/v1/billing/collection-suspense/{provider}/{reference}/resolutions")
     async def resolve_collection_suspense(
         provider: Literal["paystack", "flutterwave", "moniepoint"], reference: ResourceId,
-        body: SuspenseResolutionStart, claims: Claims = Depends(current_claims),
+        body: SuspenseResolutionStart, claims: Claims = Depends(need("finance")),
     ):
-        require(claims, "finance")
         if claims.tenant_id != "platform":
             raise error("Platform finance scope is required.", 403, "forbidden")
         if body.tenant_id == "platform":
@@ -608,8 +620,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         )
 
     @app.post("/v1/billing/recovery", status_code=202)
-    async def recover_billing(body: FundingRecovery, claims: Claims = Depends(current_claims)):
-        require(claims, "delivery")
+    async def recover_billing(body: FundingRecovery, claims: Claims = Depends(need("delivery"))):
         workflow_id = f"billing:{claims.tenant_id}:{body.subscription_id}:{body.cycle}"
         snapshot = await app.state.workflows.query(workflow_id)
         if (snapshot.get("tenant_id") != claims.tenant_id

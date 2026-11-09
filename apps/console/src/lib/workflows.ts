@@ -84,6 +84,10 @@ const ENGAGEMENT: Record<string, Mapping> = {
   cancelled: { label: 'Cancelled', state: 'stopped', stage: 'prepare' },
 }
 
+/** The orchestrator lists a workflow whose worker can't answer as `unavailable`: its real state is unknown. */
+const UNAVAILABLE: Mapping = { label: 'Not answering', state: 'failed', stage: 'prepare' }
+for (const table of [CAMPAIGN, STUDIO, OFFER_JOB, ENGAGEMENT]) table.unavailable = UNAVAILABLE
+
 const TABLES: Record<WorkKind, Record<string, Mapping>> = { campaign: CAMPAIGN, studio: STUDIO, 'offer-job': OFFER_JOB, engagement: ENGAGEMENT }
 
 export function describe(kind: WorkKind, status: string): Mapping {
@@ -162,4 +166,11 @@ export function countBy(items: WorkItem[]): Record<WorkKind, Record<WorkState, n
   const counts: Record<WorkKind, Record<WorkState, number>> = { campaign: empty(), studio: empty(), 'offer-job': empty(), engagement: empty() }
   for (const item of items) counts[item.kind][item.state] += 1
   return counts
+}
+
+/** Search by name, id, offer number or offer name; surrounding spaces don't count. */
+export function matchesWork(item: WorkItem, query: string, offerName: (id: string | null) => string): boolean {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return true
+  return `${item.title} ${item.id} ${item.offer ?? ''} ${offerName(item.offer)} ${item.label}`.toLowerCase().includes(needle)
 }

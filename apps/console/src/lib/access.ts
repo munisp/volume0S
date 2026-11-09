@@ -97,7 +97,8 @@ export const AREAS = {
   services: ['reader'],
   client: ['reader'],
   catalogue: ['reader'],
-  finance: ['finance', 'sales', 'delivery', 'auditor'],
+  // Reading billing is open to every reader-class role on the server; actions stay role-gated.
+  finance: ['reader'],
   intelligence: ['analyst', 'sales'],
   administration: ['super-operator'],
 } as const satisfies Record<string, readonly string[]>

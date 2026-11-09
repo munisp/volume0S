@@ -45,9 +45,11 @@ export function AdminPage() {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     void run(async () => {
-      await api.setSuppression(String(data.get('channel')), String(data.get('recipient')), String(data.get('reason')), data.get('suppressed') === 'true')
+      const result = await api.setSuppression(String(data.get('channel')), String(data.get('recipient')).trim(), String(data.get('reason')).trim(), data.get('suppressed') === 'true')
       setModal(null)
-      notify('success', data.get('suppressed') === 'true' ? 'Recipient suppressed. Only a keyed digest of the address is stored.' : 'Suppression lifted.')
+      if (data.get('suppressed') === 'true') notify('success', 'Recipient added to the opt-out list. They won\'t be messaged on that channel.')
+      else if (result.status === 'not_suppressed') notify('info', 'That recipient wasn\'t on the opt-out list for that channel, so nothing changed.')
+      else notify('success', 'Recipient removed from the opt-out list.')
     })
   }
 
@@ -103,8 +105,8 @@ export function AdminPage() {
           <label className="field"><span>Channel</span><select name="channel"><option value="email">Email</option><option value="sms">SMS</option><option value="whatsapp">WhatsApp</option><option value="social">Social</option></select></label>
           <label className="field"><span>Action</span><select name="suppressed"><option value="true">Suppress</option><option value="false">Lift suppression</option></select></label>
         </div>
-        <Field label="Recipient" name="recipient" placeholder="Email address or phone number" required />
-        <Field label="Reason" name="reason" placeholder="Customer opted out on 9 Nov" required />
+        <Field label="Recipient" name="recipient" placeholder="customer@example.com or +2348012345678" required hint="Email for email; an international number starting with + for SMS and WhatsApp; a handle for social." />
+        <Field label="Reason" name="reason" placeholder="Customer opted out on 9 Nov" maxLength={500} required />
         <Submit busy={busy} label="Save" />
       </form>
     </Modal>}

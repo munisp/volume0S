@@ -24,12 +24,31 @@ export class VolumeOSAuth {
 
   get configured() { return Boolean(this.manager) }
 
+  /** Called with the new user each time the token is renewed, so the app's copy never goes stale. */
+  onUser(listener: (user: User) => void): () => void {
+    if (!this.manager) return () => undefined
+    this.manager.events.addUserLoaded(listener)
+    return () => this.manager?.events.removeUserLoaded(listener)
+  }
+
   async user() { return this.manager?.getUser() ?? null }
 
+  /** A valid access token, quietly renewed with the refresh token when it has expired; null when the session is over. */
   async accessToken() {
     const current = await this.user()
-    return current && !current.expired ? current.access_token : null
+    if (current && !current.expired) return current.access_token
+    if (current?.refresh_token && this.manager) {
+      try {
+        const renewed = await (this.renewing ??= this.manager.signinSilent().finally(() => { this.renewing = null }))
+        return renewed && !renewed.expired ? renewed.access_token : null
+      } catch {
+        return null
+      }
+    }
+    return null
   }
+
+  private renewing: Promise<User | null> | null = null
 
   async signIn(returnTo = '/') {
     if (!this.manager) throw new Error('Sign-in is not configured for this deployment.')
@@ -51,7 +70,13 @@ export class VolumeOSAuth {
     return typeof state?.returnTo === 'string' ? safePath(state.returnTo) : '/'
   }
 
-  async signOut() { await this.manager?.removeUser() }
+  /** Ends the identity-provider session too, so the next person on this computer must sign in again (BB-01). */
+  async signOut() {
+    if (!this.manager) return
+    const current = await this.manager.getUser()
+    await this.manager.removeUser()
+    await this.manager.signoutRedirect({ id_token_hint: current?.id_token })
+  }
 }
 
 /** Only same-site paths: never let a sign-in state send someone to another origin. */

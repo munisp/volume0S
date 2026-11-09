@@ -22,7 +22,9 @@ export function CampaignsPage() {
   const [approvalId, setApprovalId] = useState('')
   const feed = feeds.campaign
   const campaigns = byRecent(feed.items)
-  const selected = campaigns.find(item => item.id === id) ?? campaigns[0]
+  // A link to a campaign this business doesn't have says so; it never opens another campaign (BB-04).
+  const selected = campaigns.find(item => item.id === id) ?? (id ? undefined : campaigns[0])
+  const missing = Boolean(id && feed.load === 'ok' && !selected)
 
   async function run(action: () => Promise<void>) {
     setBusy(true)
@@ -54,8 +56,9 @@ export function CampaignsPage() {
       description="Drafted campaigns wait for a person's approval. Only after approval are funds reserved and messages sent; suppression and the outbound kill switch are checked before every send."
       actions={<>
         <button className="button button-secondary" onClick={() => void refresh()} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spin' : ''} /> Refresh</button>
-        {allowed(roles, 'startCampaign') && <button className="button button-primary" onClick={() => setModal(true)}><Plus size={15} /> New campaign</button>}
+        {allowed(roles, 'startCampaign') && <button className="button button-primary" onClick={() => setModal(true)} disabled={feed.load === 'error'} title={feed.load === 'error' ? 'Paused until the campaign list loads' : undefined}><Plus size={15} /> New campaign</button>}
       </>} />
+    {missing && <Note tone="failed">There's no campaign “{id}” in this business. The link may be mistyped, or the campaign belongs to another business.</Note>}
     {feed.load === 'error' && <Note tone="failed">The campaign list didn't load: {feed.error} Actions are paused until it does.</Note>}
     <div className="workspace-grid">
       <section className="queue-panel" aria-label="Campaigns">

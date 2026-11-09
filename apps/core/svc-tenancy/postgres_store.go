@@ -220,8 +220,8 @@ func (s *PostgresStore) SetOutboundSuspended(ctx context.Context, id string, sus
 
 func (s *PostgresStore) CreateWorkspace(ctx context.Context, tenantID, name string) (Workspace, error) {
 	w := Workspace{ID: newID(), TenantID: tenantID, Name: strings.TrimSpace(name), CreatedAt: time.Now().UTC()}
-	if w.Name == "" || len(w.Name) > 120 {
-		return w, ErrInvalidChange
+	if err := checkName("workspace name", name); err != nil {
+		return w, err
 	}
 	err := s.tx(ctx, tenantID, func(tx pgx.Tx) error {
 		var state Lifecycle
@@ -296,12 +296,13 @@ func (s *PostgresStore) AuthorizeDispatch(ctx context.Context, tenantID, channel
 	return decision, pgError(err)
 }
 
-func (s *PostgresStore) SetSuppression(ctx context.Context, tenantID, channel, recipient string, suppressed bool, reason string) error {
+func (s *PostgresStore) SetSuppression(ctx context.Context, tenantID, channel, recipient string, suppressed bool, reason string) (bool, error) {
 	reason = strings.TrimSpace(reason)
-	if !validSuppressionInput(channel, recipient, reason, suppressed) {
-		return ErrInvalidChange
+	if err := checkSuppressionInput(channel, recipient, reason, suppressed); err != nil {
+		return false, err
 	}
-	return pgError(s.tx(ctx, tenantID, func(tx pgx.Tx) error {
+	changed := false
+	err := pgError(s.tx(ctx, tenantID, func(tx pgx.Tx) error {
 		var exists bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)`, tenantID).Scan(&exists); err != nil {
 			return err
@@ -313,12 +314,15 @@ func (s *PostgresStore) SetSuppression(ctx context.Context, tenantID, channel, r
 			_, err := tx.Exec(ctx, `INSERT INTO suppressions(tenant_id,channel,recipient_digest,reason) VALUES ($1,$2,$3,$4)
 				ON CONFLICT (tenant_id,channel,recipient_digest) DO UPDATE SET reason=EXCLUDED.reason,created_at=now()`,
 				tenantID, channel, s.recipientDigest(recipient), reason)
+			changed = err == nil
 			return err
 		}
-		_, err := tx.Exec(ctx, `DELETE FROM suppressions WHERE tenant_id=$1 AND channel=$2 AND recipient_digest=$3`,
+		tag, err := tx.Exec(ctx, `DELETE FROM suppressions WHERE tenant_id=$1 AND channel=$2 AND recipient_digest=$3`,
 			tenantID, channel, s.recipientDigest(recipient))
+		changed = err == nil && tag.RowsAffected() > 0
 		return err
 	}))
+	return changed, err
 }
 
 func (s *PostgresStore) GetDispatchResult(ctx context.Context, tenantID, key string) (DispatchResult, error) {

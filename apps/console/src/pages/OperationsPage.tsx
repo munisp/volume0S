@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { useSession } from '../state/session-context'
 import { useOperations } from '../state/operations-context'
-import { byRecent, KIND_LABEL, type WorkItem, type WorkKind, type WorkState } from '../lib/workflows'
+import { byRecent, KIND_LABEL, matchesWork, type WorkItem, type WorkKind, type WorkState } from '../lib/workflows'
 import { Empty, Note, OfferMark, PageHead, Panel, SearchBox, Segmented, StageSteps, StageTrack, When, WorkStatus } from '../components/ui'
 import { dateTime, money } from '../lib/format'
 
@@ -25,15 +25,16 @@ export function OperationsPage() {
   const { tenant, offerName } = useSession()
   const { items, feeds, refresh, refreshing, refreshedAt } = useOperations()
   const [params, setParams] = useSearchParams()
-  const state = (params.get('state') ?? 'all') as StateFilter
-  const kind = (params.get('kind') ?? 'all') as KindFilter
+  const pick = <T extends string>(value: string | null, allowed: readonly string[]) => (value && allowed.includes(value) ? value : 'all') as T
+  const state = pick<StateFilter>(params.get('state'), ['needs-review', 'running', 'failed', 'stopped', 'done'])
+  const kind = pick<KindFilter>(params.get('kind'), ['engagement', 'offer-job', 'studio', 'campaign'])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState<string | null>(null)
   const set = (key: string, value: string | null) => setParams(current => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next }, { replace: true })
 
   const inKind = useMemo(() => items.filter(item => kind === 'all' || item.kind === kind), [items, kind])
   const shown = byRecent(inKind.filter(item => (state === 'all' || item.state === state)
-    && (!query || `${item.title} ${item.id} ${item.status}`.toLowerCase().includes(query.toLowerCase()))))
+    && matchesWork(item, query, offerName)))
   const count = (value: WorkState) => inKind.filter(item => item.state === value).length
   const failing = (Object.keys(feeds) as WorkKind[]).filter(k => feeds[k].load === 'error')
 
@@ -53,7 +54,7 @@ export function OperationsPage() {
         <span className="small muted" style={{ marginLeft: 'auto' }}>{refreshedAt ? `Updated ${refreshedAt.toLocaleTimeString('en-NG')}` : 'Loading'}</span>
       </div>
       {shown.length === 0 ? <Empty title="No workflows match" center>Change the filters, or start work from a service page.</Empty>
-        : <div className="table-wrap"><table className="data">
+        : <div className="table-wrap"><table className="data stack-sm">
           <thead><tr><th style={{ width: 28 }} /><th>Workflow</th><th>Type</th><th>Offer</th><th>Status</th><th>Progress</th><th className="right">Ran for</th><th className="right">Last activity</th></tr></thead>
           <tbody>{shown.map(item => {
             const key = `${item.kind}:${item.id}`
@@ -78,7 +79,7 @@ export function OperationsPage() {
                     {item.error && <><dt>Error</dt><dd>{item.error}</dd></>}
                     <dt>Started</dt><dd>{dateTime(item.startedAt)}</dd>
                     <dt>Last activity</dt><dd>{dateTime(item.updatedAt)}</dd>
-                    {item.amountMinor !== null && <><dt>Amount</dt><dd className="num">{money(item.amountMinor, item.currency)}</dd></>}
+                    {item.amountMinor !== null && <><dt>Requested amount</dt><dd className="num">{money(item.amountMinor, item.currency)}</dd></>}
                   </dl>
                   <p className="small muted">Retries happen inside the workflow engine and aren't reported here. A failed workflow is not restarted automatically; start the work again from its service page.</p>
                 </div>

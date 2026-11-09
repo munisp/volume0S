@@ -83,7 +83,7 @@ export function OverviewPage() {
     </div>
 
     <Panel title="Work in progress" meta={refreshedAt ? `From the workflow engine · updated ${refreshedAt.toLocaleTimeString('en-NG')}` : 'Loading from the workflow engine'} flush>
-      <div className="table-wrap"><table className="data"><thead><tr><th>Type</th>{STATES.map(state => <th key={state} className="right">{STATE_HEAD[state]}</th>)}<th /></tr></thead><tbody>
+      <div className="table-wrap"><table className="data stack-sm"><thead><tr><th>Type</th>{STATES.map(state => <th key={state} className="right">{STATE_HEAD[state]}</th>)}<th /></tr></thead><tbody>
         {KINDS.map(kind => <tr key={kind}>
           <td className="title">{KIND_LABEL[kind]}s</td>
           {STATES.map(state => <td key={state} className="right num">{unknown(kind) ? <span className="muted" title={feeds[kind].error ?? 'Loading'}>—</span> : counts[kind][state]}</td>)}

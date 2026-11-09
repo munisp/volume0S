@@ -97,7 +97,7 @@ export function WalletPage() {
     if (!pending) return
     setBusy(true)
     try {
-      const result = await api.startTopup(pending.provider, pending.reference, { amount_minor: kobo(pending.amount), currency: 'NGN', customer_email: pending.email, redirect_url: `${window.location.origin}/wallet` })
+      const result = await api.startTopup(pending.provider, pending.reference, { amount_minor: kobo(pending.amount), currency: 'NGN', customer_email: pending.email, redirect_url: `${window.location.origin}/billing/callback` })
       setCheckout(result); setPending(null)
       notify('info', 'Checkout created. Complete the payment with the provider; the money appears only after they confirm it.')
     } catch (error) { notify('error', errorText(error)) } finally { setBusy(false) }
@@ -161,5 +161,23 @@ export function ProfilePage() {
         <dl className="props"><dt>Name</dt><dd>{String(user?.profile.name ?? '—')}</dd><dt>Email</dt><dd>{String(user?.profile.email ?? '—')}</dd></dl>
       </Panel>
     </div>
+  </div>
+}
+
+/** Where the payment provider sends the payer back (BB-03). It confirms nothing: money counts only once the provider
+ * has confirmed settlement to VolumeOS, which happens separately and is shown on the balance. */
+export function PaymentReturnPage({ backTo, backLabel }: { backTo: string; backLabel: string }) {
+  const params = new URLSearchParams(window.location.search)
+  const reference = params.get('reference') ?? params.get('trxref') ?? params.get('tx_ref') ?? ''
+  return <div className="page">
+    <PageHead title="Payment submitted" description="Thanks. You've come back from the payment page." />
+    <Panel>
+      <div className="stack">
+        {reference && <p className="body-copy">Reference <span className="mono">{reference}</span></p>}
+        <p className="body-copy">If you completed the payment, it appears in the balance once the payment provider confirms it to us. That usually takes a few minutes. This page doesn't confirm the payment itself, so nothing has been added yet.</p>
+        <p className="body-copy">If you cancelled or the payment failed, nothing has been charged.</p>
+        <div className="row"><Link className="button button-primary" to={backTo}>{backLabel}</Link></div>
+      </div>
+    </Panel>
   </div>
 }

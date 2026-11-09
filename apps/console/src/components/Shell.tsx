@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link, NavLink, useLocation } from 'react-router'
 import { CircleAlert, CircleCheck, CloudOff, LogOut, Menu, RefreshCw, ShieldCheck, X, type LucideIcon } from 'lucide-react'
 import { useSession } from '../state/session-context'
-import { roleLabel } from '../lib/access'
+import { roleLabel, sees } from '../lib/access'
 import { usePwa } from '../hooks/usePwa'
 import { Mark } from './ui'
 
@@ -68,7 +68,7 @@ export function Shell({ groups, crumbs, children, footnote }: { groups: NavGroup
         </nav>
         <div className="topbar-end">
           {pwa.online
-            ? <span className="signal"><i /><span>Live</span></span>
+            ? <span className="signal" title="This device is online"><i /><span>Online</span></span>
             : <span className="signal off"><CloudOff size={13} /><span>Offline</span></span>}
           {user && <button className="user-button" onClick={() => setMenu(open => !open)} aria-expanded={menu} aria-haspopup="menu">
             <span className="avatar" aria-hidden="true">{initials(name)}</span><span className="who">{name}</span>
@@ -82,7 +82,13 @@ export function Shell({ groups, crumbs, children, footnote }: { groups: NavGroup
           <button role="menuitem" onClick={() => void signOut()}><LogOut size={15} /> Sign out of this tab</button>
         </div>}
       </header>
-      <main id="main" className="main" tabIndex={-1}>{children}</main>
+      <main id="main" className="main" tabIndex={-1}>
+        {tenant?.outbound_suspended && <div className="suspended-bar" role="status">
+          <strong>Outbound messages are suspended for {tenant.name}.</strong> Nothing is sent to customers by email, SMS, WhatsApp or social until someone restores it.
+          {sees(roles, 'administration') && <> <Link to="/admin">Manage in Administration</Link></>}
+        </div>}
+        {children}
+      </main>
     </div>
 
     {toast && <div className={`toast toast-${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'} key={toast.id}>

@@ -94,7 +94,10 @@ func (s *MemoryStore) CreateWorkspace(_ context.Context, tenantID, name string) 
 	if !ok {
 		return Workspace{}, ErrNotFound
 	}
-	if t.State == Offboarded || strings.TrimSpace(name) == "" {
+	if err := checkName("workspace name", name); err != nil {
+		return Workspace{}, err
+	}
+	if t.State == Offboarded {
 		return Workspace{}, ErrInvalidChange
 	}
 	w := Workspace{ID: newID(), TenantID: tenantID, Name: strings.TrimSpace(name), CreatedAt: time.Now().UTC()}
@@ -153,10 +156,6 @@ func validCurrency(currency string) bool {
 	return true
 }
 
-func validSuppressionInput(channel, recipient, reason string, suppressed bool) bool {
-	reason = strings.TrimSpace(reason)
-	return validMessagingChannel(channel) && normalizeRecipient(recipient) != "" && len(reason) <= 500 && (!suppressed || reason != "")
-}
 
 func (s *MemoryStore) AuthorizeDispatch(_ context.Context, tenantID, channel, recipient string) (DispatchDecision, error) {
 	s.mu.RLock()
@@ -180,22 +179,23 @@ func (s *MemoryStore) AuthorizeDispatch(_ context.Context, tenantID, channel, re
 	return DispatchDecision{Allowed: true, Reason: "authorized"}, nil
 }
 
-func (s *MemoryStore) SetSuppression(_ context.Context, tenantID, channel, recipient string, suppressed bool, reason string) error {
-	if !validSuppressionInput(channel, recipient, reason, suppressed) {
-		return ErrInvalidChange
+func (s *MemoryStore) SetSuppression(_ context.Context, tenantID, channel, recipient string, suppressed bool, reason string) (bool, error) {
+	if err := checkSuppressionInput(channel, recipient, reason, suppressed); err != nil {
+		return false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.tenants[tenantID]; !ok {
-		return ErrNotFound
+		return false, ErrNotFound
 	}
 	key := suppressionKey(tenantID, channel, recipient)
 	if suppressed {
 		s.suppressions[key] = strings.TrimSpace(reason)
-	} else {
-		delete(s.suppressions, key)
+		return true, nil
 	}
-	return nil
+	_, existed := s.suppressions[key]
+	delete(s.suppressions, key)
+	return existed, nil
 }
 
 func (s *MemoryStore) GetDispatchResult(_ context.Context, tenantID, key string) (DispatchResult, error) {

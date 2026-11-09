@@ -1,4 +1,5 @@
 import { ArrowRight, Banknote, Check, LockKeyhole, LogIn, ShieldCheck, UserRoundCheck } from 'lucide-react'
+import { useLocation } from 'react-router'
 import { useSession } from '../state/session-context'
 import { money } from '../lib/format'
 import type { Offer } from '../lib/types'
@@ -19,15 +20,23 @@ const FLOW = [
   { id: 'settle', title: 'Settle & deliver', copy: 'The final cost is charged. If anything failed, the reservation is released.' },
 ]
 
+/** The entry price, setup fee included where there is one (the cheapest tier's own setup, not a mix of tiers). */
 function fromPrice(offer: Offer): string | null {
-  const packs = offer.tiers.map(tier => tier.pack_minor ?? 0).filter(Boolean)
-  if (packs.length) return `from ${money(Math.min(...packs))} per pack`
-  const monthly = offer.tiers.map(tier => tier.monthly_minor).filter(Boolean)
-  return monthly.length ? `from ${money(Math.min(...monthly))} a month` : null
+  const packs = offer.tiers.filter(tier => tier.pack_minor)
+  if (packs.length) {
+    const cheapest = packs.reduce((a, b) => ((a.pack_minor ?? 0) <= (b.pack_minor ?? 0) ? a : b))
+    return `from ${money(cheapest.pack_minor)} per pack`
+  }
+  const monthly = offer.tiers.filter(tier => tier.monthly_minor)
+  if (!monthly.length) return null
+  const cheapest = monthly.reduce((a, b) => (a.monthly_minor <= b.monthly_minor ? a : b))
+  return `from ${money(cheapest.monthly_minor)} a month${cheapest.setup_minor ? ` + ${money(cheapest.setup_minor)} setup` : ''}`
 }
 
 export function LandingPage() {
-  const { signIn, signInAvailable, catalogue } = useSession()
+  const { signIn, signInAvailable, catalogue, sessionEnded } = useSession()
+  const { pathname } = useLocation()
+  const wantedPage = pathname !== '/'
   const sellable = catalogue.offers.filter(offer => Number(offer.id) <= 8 && offer.tiers.length > 0)
   const built = catalogue.offers.filter(offer => Number(offer.id) <= 8 && offer.tiers.length === 0)
   const later = catalogue.offers.filter(offer => Number(offer.id) > 8)
@@ -48,6 +57,7 @@ export function LandingPage() {
     <main id="main">
     <section className="landing-hero">
       <div className="landing-hero-copy">
+        {(sessionEnded || wantedPage) && <p className="landing-notice" role="status">{sessionEnded ? 'Your session ended. Sign in again to carry on where you left off.' : 'Sign in to open that page.'}</p>}
         <p className="landing-eyebrow">The operating platform for the Naira Volume Playbook</p>
         <h1>Run client services at volume. Keep every release in human hands.</h1>
         <p className="landing-lede">VolumeOS lets a small team deliver packaged marketing and operations services to Nigerian businesses at volume. Automation prepares the work; people approve it before anything reaches a customer or spends a kobo.</p>

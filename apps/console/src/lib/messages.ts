@@ -17,10 +17,15 @@ const GENERIC = new Set([
 
 export function plainError(error: unknown): string {
   if (!error || typeof error !== 'object') return 'That didn\'t work. Try again.'
-  const { message = '', status = 0, code = '' } = error as Failure
-  const role = /^required role: ([a-z-]+)\.?$/i.exec(message) ?? /^Required role: ([a-z-]+)\.?$/.exec(message)
+  const { status = 0, code = '' } = error as Failure
+  // Tenancy prefixes its specific reasons with the generic one ("invalid state change: for email, …").
+  const message = ((error as Failure).message ?? '').replace(/^invalid state change: /, '')
+  const role = /^required role: ([a-z -]+?)\.?$/i.exec(message)
   if (status === 403 || code === 'forbidden') {
-    return role ? `Your role can't do this. It needs the ${roleLabel(role[1])} role.` : 'Your role can\'t do this.'
+    if (!role) return 'Your role can\'t do this.'
+    const roles = role[1].split(/\s+or\s+/).map(roleLabel)
+    const named = roles.length > 1 ? `${roles.slice(0, -1).join(', ')} or ${roles.at(-1)}` : roles[0]
+    return `Your role can't do this. It needs the ${named} role.`
   }
   if (status === 401) return 'Your session has ended. Sign in again to continue.'
   if (code === 'stale_plan') return 'The plan changed after you opened it. The current version has been loaded; check it before deciding.'

@@ -163,9 +163,13 @@ func (a *API) setSuppression(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	err := a.store.SetSuppression(r.Context(), claimsFrom(r.Context()).TenantID, input.Channel, input.Recipient,
+	changed, err := a.store.SetSuppression(r.Context(), claimsFrom(r.Context()).TenantID, input.Channel, input.Recipient,
 		r.Method == http.MethodPut, input.Reason)
-	respond(w, r, http.StatusOK, map[string]string{"status": "updated"}, err)
+	status := "updated"
+	if !changed && r.Method == http.MethodDelete {
+		status = "not_suppressed" // nothing was lifted: that recipient wasn't on the list
+	}
+	respond(w, r, http.StatusOK, map[string]string{"status": status}, err)
 }
 
 func (a *API) getDispatchResult(w http.ResponseWriter, r *http.Request) {

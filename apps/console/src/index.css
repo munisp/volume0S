@@ -119,6 +119,8 @@
 .user-menu a, .user-menu button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: var(--radius); background: none; color: var(--ink); font-size: 13px; text-align: left; }
 .user-menu a:hover, .user-menu button:hover { background: var(--panel-sunk); text-decoration: none; }
 
+.suspended-bar { margin-bottom: 16px; padding: 10px 14px; border: 1px solid #efc2bb; border-radius: var(--radius); background: var(--failed-bg); color: var(--failed); font-size: 13px; }
+.suspended-bar a { color: var(--failed); font-weight: 600; text-decoration: underline; }
 .main { width: 100%; max-width: 1320px; padding: 24px 28px 64px; }
 .drawer-backdrop { display: none; }
 
@@ -474,6 +476,7 @@ table.data tr.diag td { background: var(--panel-sunk); }
 .landing-ghost:hover { background: var(--rail-2); text-decoration: none; }
 
 .landing-hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 56px; align-items: center; padding: 72px max(24px, calc((100vw - 1180px) / 2)) 88px; }
+.landing-notice { display: inline-flex; margin-bottom: 18px; padding: 8px 12px; border: 1px solid rgb(217 138 0 / 45%); border-radius: var(--radius); background: rgb(217 138 0 / 12%); color: #f3c46b; font-size: 14px; font-weight: 600; }
 .landing-eyebrow { color: #5fc79c; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
 .landing-hero h1 { margin-top: 16px; font-family: var(--font-display); font-size: clamp(36px, 4.6vw, 58px); font-weight: 600; line-height: 1.04; letter-spacing: -0.035em; color: #f6f3ec; }
 .landing-lede { margin-top: 20px; max-width: 560px; color: var(--rail-ink-2); font-size: 17px; line-height: 1.6; }

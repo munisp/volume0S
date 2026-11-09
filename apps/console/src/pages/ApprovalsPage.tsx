@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useSession } from '../state/session-context'
 import { useOperations } from '../state/operations-context'
-import { byRecent, byWaiting, KIND_LABEL, type WorkItem, type WorkKind } from '../lib/workflows'
+import { byRecent, byWaiting, KIND_LABEL, matchesWork, type WorkItem, type WorkKind } from '../lib/workflows'
 import { Empty, Note, OfferMark, PageHead, Panel, SearchBox, Segmented, StageTrack, When, WorkStatus } from '../components/ui'
 import { money } from '../lib/format'
 
@@ -31,14 +31,16 @@ export function ApprovalsPage() {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const tab = (params.get('tab') === 'decided' ? 'decided' : 'pending') as Tab
-  const kind = (params.get('kind') ?? 'all') as KindFilter
+  // An unknown filter in the address falls back to all, instead of quietly showing nothing (BB-17).
+  const kind = ((['engagement', 'offer-job', 'studio', 'campaign'] as string[]).includes(params.get('kind') ?? '') ? params.get('kind') : 'all') as KindFilter
   const [query, setQuery] = useState('')
+  const matches = (item: WorkItem, text: string) => matchesWork(item, text, offerName)
 
   const pending = useMemo(() => byWaiting(items.filter(item => item.state === 'needs-review')), [items])
   const decided = useMemo(() => byRecent(items.filter(item => AFTER_DECISION[item.kind].has(item.status))), [items])
   const source = tab === 'pending' ? pending : decided
   const shown = source.filter(item => (kind === 'all' || item.kind === kind)
-    && (!query || `${item.title} ${item.id} ${item.offer ?? ''}`.toLowerCase().includes(query.toLowerCase())))
+    && matches(item, query))
   const failing = (Object.keys(feeds) as WorkKind[]).filter(k => feeds[k].load === 'error')
   const set = (key: string, value: string | null) => setParams(current => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next }, { replace: true })
   const kinds: WorkKind[] = ['engagement', 'offer-job', 'studio', 'campaign']

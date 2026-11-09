@@ -36,7 +36,9 @@ export function StudioPage() {
   }, [api])
   useEffect(() => { const first = window.setTimeout(() => void refresh(), 0); return () => window.clearTimeout(first) }, [refresh])
 
-  const pack = packs.find(item => item.pack_id === id) ?? packs[0]
+  // A link to a pack this business doesn't have says so; it never opens another pack (BB-04).
+  const pack = packs.find(item => item.pack_id === id) ?? (id ? undefined : packs[0])
+  const missing = Boolean(id && load.state === 'ok' && !pack)
   const item = pack ? fromStudio(pack) : null
 
   useEffect(() => {
@@ -90,6 +92,7 @@ export function StudioPage() {
         <button className="button button-secondary" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button>
         {allowed(roles, 'startStudioPack') && <button className="button button-primary" onClick={() => setModal(true)}><Plus size={15} /> New pack</button>}
       </>} />
+    {missing && <Note tone="failed">There's no Studio pack “{id}” in this business. The link may be mistyped, or the pack belongs to another business.</Note>}
     {load.state === 'error' && <Note tone="failed">The pack list didn't load: {load.error}</Note>}
     <div className="workspace-grid">
       <section className="queue-panel" aria-label="Studio packs">

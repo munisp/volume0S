@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { allowed, can, needs, personaOf, rolesFromToken, sees } from './access.ts'
-import { byWaiting, countBy, describe, fromEngagement, fromOfferJob } from './workflows.ts'
+import { byWaiting, countBy, describe, fromEngagement, fromOfferJob, matchesWork } from './workflows.ts'
 import { plainError } from './messages.ts'
 import type { EngagementSnapshot, OfferJobSnapshot } from './types.ts'
 
@@ -58,6 +58,12 @@ test('approved is not delivered, and a failed workflow says where it stopped', (
   assert.equal(failed.href, '/engagements/e-failed')
 })
 
+test('a workflow whose worker can\'t answer reads as not answering, not as progress', () => {
+  for (const kind of ['campaign', 'studio', 'offer-job', 'engagement'] as const) {
+    assert.deepEqual([describe(kind, 'unavailable').label, describe(kind, 'unavailable').state], ['Not answering', 'failed'])
+  }
+})
+
 test('unknown statuses are shown as they are, never hidden', () => {
   assert.equal(describe('studio', 'brand_new_state').label, 'Brand new state')
 })
@@ -72,6 +78,15 @@ test('the review queue lists the longest wait first, and counts add up', () => {
   assert.equal(counts['offer-job'].failed, 1)
 })
 
+test('search ignores surrounding spaces and finds offer names', () => {
+  const item = fromEngagement(engagement('awaiting-approval', { engagement_id: 'e2e-155811-c', title: 'E2E console plan 155811', offer: '29' }))
+  const name = (id: string | null) => (id === '29' ? 'Course Tutor' : '')
+  assert.ok(matchesWork(item, '  155811  ', name))
+  assert.ok(matchesWork(item, 'course tutor', name))
+  assert.ok(matchesWork(item, '', name))
+  assert.ok(!matchesWork(item, 'website', name))
+})
+
 test('refusals read as plain words', () => {
   assert.equal(plainError({ status: 403, code: 'forbidden', message: 'required role: delivery' }), 'Your role can\'t do this. It needs the Delivery role.')
   assert.equal(plainError({ status: 409, code: 'conflict', message: 'resource exists or version is stale' }),
@@ -79,6 +94,10 @@ test('refusals read as plain words', () => {
   assert.equal(plainError({ status: 422, code: 'invalid_state', message: 'invalid state change' }),
     'Some details weren\'t accepted. Check the lengths and formats, then try again.')
   assert.equal(plainError({ status: 503, message: '' }), 'This service isn\'t running on this deployment right now.')
+  assert.equal(plainError({ status: 403, code: 'forbidden', message: 'Required role: delivery or analyst.' }), 'Your role can\'t do this. It needs the Delivery or Analyst role.')
+  assert.equal(plainError({ status: 422, code: 'invalid_state', message: 'invalid state change: for email, the recipient must be an email address' }),
+    'for email, the recipient must be an email address')
+  assert.equal(plainError({ status: 400, code: 'invalid_request', message: 'Check these fields: title, offer.' }), 'Check these fields: title, offer.')
   assert.equal(plainError({ status: 409, code: 'conflict', message: 'Engagement ID already exists.' }), 'Engagement ID already exists.', 'specific server text is kept')
   assert.equal(plainError({ status: 503, code: 'money_service_unavailable', message: 'Money service is unavailable.' }),
     'Billing isn\'t running on this deployment, so this can\'t be done yet.')

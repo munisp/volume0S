@@ -20,7 +20,7 @@ import { CampaignsPage } from './pages/CampaignsPage'
 import { StudioPage } from './pages/StudioPage'
 import { EngagementsPage, FinancePage, FrontDeskPage, OfferJobsPage } from './pages/ServicePages'
 import { AccountPage, AdminPage, ForbiddenPage, IntelligencePage, NotFoundPage } from './pages/AdminPages'
-import { ClientHomePage, ProfilePage, WalletPage } from './pages/ClientPages'
+import { ClientHomePage, PaymentReturnPage, ProfilePage, WalletPage } from './pages/ClientPages'
 import { LandingPage } from './pages/LandingPage'
 
 type RouteDef = { path: string; title: string; section?: string; sectionTo?: string; area?: Area; element: ReactNode }
@@ -44,6 +44,7 @@ const OPERATOR_ROUTES: RouteDef[] = [
   { path: '/intelligence', title: 'Intelligence', section: 'Insight', area: 'intelligence', element: <IntelligencePage /> },
   { path: '/admin', title: 'Administration', section: 'Admin', area: 'administration', element: <AdminPage /> },
   { path: '/account', title: 'Your access', section: 'Account', element: <AccountPage /> },
+  { path: '/billing/callback', title: 'Payment submitted', section: 'Finance', sectionTo: '/finance', element: <PaymentReturnPage backTo="/finance" backLabel="Back to finance" /> },
 ]
 
 const CLIENT_ROUTES: RouteDef[] = [
@@ -53,6 +54,7 @@ const CLIENT_ROUTES: RouteDef[] = [
   { path: '/engagements/:id', title: 'Engagement', section: 'Engagements', sectionTo: '/engagements', element: <EngagementsPage clientView /> },
   { path: '/wallet', title: 'Wallet & billing', element: <WalletPage /> },
   { path: '/profile', title: 'Business profile', element: <ProfilePage /> },
+  { path: '/billing/callback', title: 'Payment submitted', section: 'Wallet & billing', sectionTo: '/wallet', element: <PaymentReturnPage backTo="/wallet" backLabel="Back to your wallet" /> },
   { path: '/account', title: 'Your access', section: 'Account', element: <AccountPage /> },
 ]
 

@@ -77,7 +77,8 @@ type Store interface {
 	CreateWorkspace(context.Context, string, string) (Workspace, error)
 	CreateSubscription(context.Context, string, string, string) (Subscription, error)
 	AuthorizeDispatch(context.Context, string, string, string) (DispatchDecision, error)
-	SetSuppression(context.Context, string, string, string, bool, string) error
+	// SetSuppression reports whether anything changed (false: lifting a recipient that was not suppressed).
+	SetSuppression(context.Context, string, string, string, bool, string) (bool, error)
 	GetDispatchResult(context.Context, string, string) (DispatchResult, error)
 	PutDispatchResult(context.Context, DispatchResult) (DispatchResult, error)
 }
@@ -94,6 +95,9 @@ func NewTenant(id, name, slug string) (Tenant, error) {
 	}
 	if len(name) < 2 || len(name) > 120 {
 		return Tenant{}, fmt.Errorf("tenant name must contain 2 to 120 characters")
+	}
+	if hiddenCharacters.MatchString(name) {
+		return Tenant{}, fmt.Errorf("tenant name contains hidden characters")
 	}
 	if !slugPattern.MatchString(slug) {
 		return Tenant{}, fmt.Errorf("slug must match %s", slugPattern.String())

@@ -23,11 +23,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [catalogue, setCatalogue] = useState<Session['catalogue']>({ offers: [], bundles: [], priceBook: '', load: 'loading', error: null })
   const [toast, setToast] = useState<Toast | null>(null)
 
+  const [sessionEnded, setSessionEnded] = useState(false)
+  // A token that can't be renewed mid-use ends the session once, cleanly, instead of every feed failing on its own.
+  // Only a session that existed can end: the check happens on the current user, inside the state update.
+  const endSession = useCallback(() => {
+    setUser(current => {
+      if (current) queueMicrotask(() => { setTenantState(null); setTenantLoad('missing'); setSessionEnded(true) })
+      return null
+    })
+  }, [])
   const api = useMemo(() => new VolumeOSApi(
-    config.coreApiUrl, config.orchestratorApiUrl, () => auth?.accessToken() ?? Promise.resolve(null), config.conversationsApiUrl,
-  ), [config, auth])
+    config.coreApiUrl, config.orchestratorApiUrl, async () => {
+      const token = await (auth?.accessToken() ?? Promise.resolve(null))
+      if (!token) endSession()
+      return token
+    }, config.conversationsApiUrl,
+  ), [config, auth, endSession])
+  useEffect(() => auth?.onUser(renewed => setUser(renewed)), [auth])
 
-  const roles = useMemo(() => rolesFromToken(user && !user.expired ? user.access_token : null), [user])
+  // Display only (the servers verify the token): read roles from the claims even when the token is about to be renewed.
+  const roles = useMemo(() => rolesFromToken(user?.access_token), [user])
   const persona = user ? personaOf(roles) : 'none'
 
   const notify = useCallback((kind: ToastKind, message: string) => setToast({ kind, message, id: Date.now() }), [])
@@ -65,8 +80,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (active) notify('error', `Sign-in couldn't be completed. ${errorText(error)}`)
       }
       if (!active) return
-      setUser(current && !current.expired ? current : null)
-      if (current && !current.expired) await loadTenant(client)
+      // An expired saved session gets one quiet renewal before it counts as ended.
+      const live = current && (!current.expired || await identity.accessToken()) ? await identity.user() : null
+      if (!active) return
+      setUser(live)
+      if (current && !live) setSessionEnded(true)
+      if (live) await loadTenant(client)
       else setTenantLoad('missing')
       if (returning && current) navigateRef.current(VolumeOSAuth.returnTo(current), { replace: true })
       setReady(true)
@@ -86,7 +105,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [catalogue.offers])
 
   const value: Session = {
-    ready, config, signInAvailable: oidcConfigured(config), user, roles, persona, api,
+    ready, config, signInAvailable: oidcConfigured(config), sessionEnded, user, roles, persona, api,
     tenant, tenantLoad, tenantError,
     reloadTenant: () => loadTenant(api),
     setTenant: next => { setTenantState(next); setTenantLoad('ok') },
@@ -95,10 +114,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       try { await auth?.signIn(returnTo) } catch (error) { notify('error', errorText(error)) }
     },
     signOut: async () => {
-      await auth?.signOut()
-      setUser(null); setTenantState(null); setTenantLoad('missing')
-      navigate('/', { replace: true })
-      notify('info', 'Signed out of this tab.')
+      // Leaves for the identity provider's sign-out page and comes back to the landing page, signed out everywhere.
+      try { await auth?.signOut() } catch (error) {
+        setUser(null); setTenantState(null); setTenantLoad('missing')
+        navigate('/', { replace: true })
+        notify('error', `You're signed out of this tab, but the sign-in service couldn't be reached to end the session everywhere. ${errorText(error)}`)
+      }
     },
   }
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

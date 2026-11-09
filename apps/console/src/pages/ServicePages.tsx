@@ -22,6 +22,7 @@ export function EngagementsPage({ clientView = false }: { clientView?: boolean }
   return <EngagementOperationsSection key={tenant?.id ?? 'none'} api={api} connected={Boolean(user && tenant && api.orchestratorConfigured)} notify={notify}
     initialId={id} onSelect={engagementId => navigate(`/engagements/${encodeURIComponent(engagementId)}`, { replace: true })}
     canStart={!clientView && allowed(roles, 'startEngagement')} canReview={!clientView && allowed(roles, 'reviewEngagement')}
+    reviewerLabel={reviewer => reviewer === user?.profile.sub ? 'you' : `another reviewer (account ${reviewer.slice(0, 8)}…)`}
     roleNote={action => clientView ? null : <RoleNote action={action === 'start' ? 'startEngagement' : 'reviewEngagement'} />} />
 }
 
