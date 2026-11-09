@@ -1,8 +1,8 @@
 import { useMemo, type ReactNode } from 'react'
 import { matchPath, Navigate, Route, Routes, useLocation } from 'react-router'
 import {
-  BookOpen, Building2, ClipboardCheck, Gauge, Inbox, Landmark, Layers3, LineChart, Loader2, LogIn, MessagesSquare,
-  Megaphone, Image as ImageIcon, PackageCheck, Settings2, UserRound, Wallet, Workflow, CircleCheck,
+  BookOpen, Building2, ClipboardCheck, Gauge, Inbox, Landmark, Layers3, LineChart, Loader2, MessagesSquare,
+  Megaphone, Image as ImageIcon, PackageCheck, Settings2, UserRound, Wallet, Workflow,
 } from 'lucide-react'
 import { SessionProvider } from './state/session'
 import { useSession } from './state/session-context'
@@ -21,6 +21,7 @@ import { StudioPage } from './pages/StudioPage'
 import { EngagementsPage, FinancePage, FrontDeskPage, OfferJobsPage } from './pages/ServicePages'
 import { AccountPage, AdminPage, ForbiddenPage, IntelligencePage, NotFoundPage } from './pages/AdminPages'
 import { ClientHomePage, ProfilePage, WalletPage } from './pages/ClientPages'
+import { LandingPage } from './pages/LandingPage'
 
 type RouteDef = { path: string; title: string; section?: string; sectionTo?: string; area?: Area; element: ReactNode }
 
@@ -125,29 +126,6 @@ function ClientApp() {
   </Shell>
 }
 
-function SignedOut() {
-  const { signIn, signInAvailable } = useSession()
-  return <div className="gate">
-    <aside className="gate-side">
-      <div className="row" style={{ gap: 10 }}><Mark /><strong style={{ fontFamily: 'var(--font-display)', fontSize: 16 }}>VolumeOS</strong></div>
-      <div>
-        <h1>Run high-volume service delivery without losing control.</h1>
-        <p>The operating platform for the Naira Volume Playbook: packaged services for Nigerian businesses, prepared by automation and released by people.</p>
-      </div>
-      <ul>
-        <li><CircleCheck size={15} /> Nothing reaches a customer or spends money without a person's approval.</li>
-        <li><CircleCheck size={15} /> Prepaid balances are kept in a ledger; a top-up counts only after the provider confirms it.</li>
-        <li><CircleCheck size={15} /> Every business sees only its own work.</li>
-      </ul>
-      <div className="stack">
-        <button className="button button-primary" onClick={() => void signIn()} disabled={!signInAvailable}><LogIn size={15} /> Sign in</button>
-        {!signInAvailable && <span className="small">Sign-in isn't configured for this deployment.</span>}
-      </div>
-    </aside>
-    <main className="gate-main" id="main"><CataloguePage readOnly /></main>
-  </div>
-}
-
 function NoRoles() {
   const { signOut, user } = useSession()
   return <div className="loading-screen" style={{ padding: 16 }}>
@@ -161,7 +139,7 @@ function NoRoles() {
 function Root() {
   const { ready, user, persona } = useSession()
   if (!ready) return <div className="loading-screen" role="status"><Mark /><Loader2 className="spin" size={18} /><span>Loading VolumeOS</span></div>
-  if (!user) return <SignedOut />
+  if (!user) return <LandingPage />
   if (persona === 'none') return <NoRoles />
   return <OperationsProvider>{persona === 'client' ? <ClientApp /> : <OperatorApp />}</OperationsProvider>
 }
