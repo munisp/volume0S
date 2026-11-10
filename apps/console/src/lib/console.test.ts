@@ -149,3 +149,18 @@ test('the business header goes only where it was chosen', async () => {
     globalThis.fetch = realFetch
   }
 })
+
+test('a new client\'s id comes from its name and never collides', async () => {
+  const { freeId, ID_PATTERN, slugify } = await import('./ids.ts')
+  assert.equal(slugify('Aster Foods Ltd'), 'aster-foods-ltd')
+  assert.equal(slugify("Bola's Kitchen & Catering"), 'bola-s-kitchen-catering')
+  assert.equal(slugify('  Café Ọlá  '), 'cafe-ola')
+  assert.equal(slugify('!!!'), '')
+  assert.ok(!ID_PATTERN.test(slugify('!!!')), 'a name with no letters or digits needs an id chosen by hand')
+  const taken = new Set(['aster-foods-ltd', 'aster-foods-ltd-2'])
+  assert.equal(freeId('aster-foods-ltd', taken), 'aster-foods-ltd-3')
+  assert.equal(freeId('new-co', taken), 'new-co')
+  const long = 'x'.repeat(63)
+  const next = freeId(long, new Set([long]))
+  assert.ok(next.length <= 63 && next.endsWith('-2') && ID_PATTERN.test(next))
+})

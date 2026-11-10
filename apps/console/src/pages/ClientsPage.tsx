@@ -4,6 +4,7 @@ import { useSession, errorText } from '../state/session-context'
 import type { Offer, Tenant, TenantSummary } from '../lib/types'
 import { Empty, Field, Modal, Note, OfferMark, PageHead, Panel, SearchBox, Status, Submit } from '../components/ui'
 import { dateTime } from '../lib/format'
+import { freeId, ID_PATTERN, slugify } from '../lib/ids'
 
 const LIFECYCLE: Record<Tenant['state'], { label: string; state: 'running' | 'done' | 'stopped' | 'needs-review' }> = {
   prospect: { label: 'Prospect', state: 'needs-review' }, onboarding: { label: 'Onboarding', state: 'running' },
@@ -12,11 +13,6 @@ const LIFECYCLE: Record<Tenant['state'], { label: string; state: 'running' | 'do
 
 /** Same rule as the catalogue's "Available to subscribe": offers 01–08 that have a price. */
 const subscribable = (offer: Offer) => Number(offer.id) >= 1 && Number(offer.id) <= 8 && offer.tiers.length > 0
-
-/** "Aster Foods Ltd" → "aster-foods-ltd": the business id and short name a new client gets unless changed. */
-function slugify(name: string): string {
-  return name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63)
-}
 
 /** The agency's client list and the way in to onboarding: platform operators only. */
 export function ClientsPage() {
@@ -77,23 +73,26 @@ type Result = { tenantId: string; name: string; email: string; password: string;
 function OnboardClient({ existing, onClose, onDone }: { existing: Set<string>; onClose: () => void; onDone: () => void }) {
   const { api, catalogue, switchTenant } = useSession()
   const [step, setStep] = useState<Step>('business')
-  const [business, setBusiness] = useState({ name: '', id: '', idEdited: false })
+  // The id is made from the name; `custom` is set only when the operator chose "Change".
+  const [business, setBusiness] = useState<{ name: string; custom: string | null }>({ name: '', custom: null })
   const [owner, setOwner] = useState({ first_name: '', last_name: '', email: '' })
   const [services, setServices] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [result, setResult] = useState<Result | null>(null)
   const sellable = catalogue.offers.filter(subscribable)
-  const taken = existing.has(business.id)
+  const autoId = freeId(slugify(business.name), existing)
+  const id = business.custom ?? autoId
+  const idValid = ID_PATTERN.test(id)
+  const taken = business.custom !== null && existing.has(id)
 
   function nextFromBusiness(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!taken) setStep('owner')
+    if (idValid && !taken) setStep('owner')
   }
 
   async function finish() {
     setBusy(true); setFailure(null)
-    const id = business.id
     let created: Tenant | null = null
     try {
       created = await api.createTenant(business.name.trim(), id, id)
@@ -126,12 +125,19 @@ function OnboardClient({ existing, onClose, onDone }: { existing: Set<string>; o
     description={step === 'done' ? undefined : `Step ${['business', 'owner', 'services'].indexOf(step) + 1} of 3`} onClose={onClose}>
     {step === 'business' && <form className="form-stack" onSubmit={nextFromBusiness}>
       <Field label="Business name" name="name" value={business.name} minLength={2} maxLength={120} required placeholder="e.g. Aster Foods Ltd"
-        onChange={event => { const name = event.target.value; setBusiness(current => ({ ...current, name, id: current.idEdited ? current.id : slugify(name) })) }} />
-      <Field label="Business id" name="id" value={business.id} required pattern="[a-z0-9][a-z0-9\-]{1,62}" title="Lowercase letters, digits and hyphens; 2 to 63 characters"
-        hint="Lowercase letters, digits and hyphens. It can't be changed later: it is how every record and sign-in finds this business."
-        onChange={event => setBusiness(current => ({ ...current, id: event.target.value.toLowerCase(), idEdited: true }))} />
-      {taken && <Note tone="failed">There is already a client with the id <strong className="mono">{business.id}</strong>. Choose another.</Note>}
-      <div className="row" style={{ justifyContent: 'flex-end' }}><button className="button button-primary" disabled={taken}>Next: the owner's sign-in <ArrowRight size={15} /></button></div>
+        onChange={event => { const name = event.target.value; setBusiness(current => ({ ...current, name })) }} />
+      {business.custom === null
+        ? business.name.trim() && <p className="small muted" data-testid="business-id-preview">
+            {idValid ? <>Business id <span className="mono">{id}</span></> : 'The name has no letters or digits to make an id from.'}
+            {' · '}<button type="button" className="text-button" onClick={() => setBusiness(current => ({ ...current, custom: idValid ? id : '' }))}>{idValid ? 'Change' : 'Choose one'}</button></p>
+        : <>
+          <Field label="Business id" name="id" value={business.custom} required pattern="[a-z0-9][a-z0-9\-]{1,62}" title="Lowercase letters, digits and hyphens; 2 to 63 characters"
+            hint="Lowercase letters, digits and hyphens. It can't be changed later: every record, sign-in and the client's wallet are keyed by it."
+            onChange={event => setBusiness(current => ({ ...current, custom: event.target.value.toLowerCase() }))} />
+          <button type="button" className="text-button" style={{ alignSelf: 'flex-start' }} onClick={() => setBusiness(current => ({ ...current, custom: null }))}>Use the id made from the name</button>
+        </>}
+      {taken && <Note tone="failed">There is already a client with the id <strong className="mono">{id}</strong>. Choose another.</Note>}
+      <div className="row" style={{ justifyContent: 'flex-end' }}><button className="button button-primary" disabled={taken || !idValid}>Next: the owner's sign-in <ArrowRight size={15} /></button></div>
     </form>}
 
     {step === 'owner' && <form className="form-stack" onSubmit={event => { event.preventDefault(); setStep('services') }}>
