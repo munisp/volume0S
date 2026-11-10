@@ -288,8 +288,8 @@ fn map_transfer_status(status: CreateTransferErrorKind) -> CreateTransferStatus 
         | S::ExistsWithDifferentUserData64
         | S::ExistsWithDifferentUserData32
         | S::ExistsWithDifferentLedger
-        | S::ExistsWithDifferentCode
-        | S::IdAlreadyFailed => CreateTransferStatus::IdempotencyConflict,
+        | S::ExistsWithDifferentCode => CreateTransferStatus::IdempotencyConflict,
+        S::IdAlreadyFailed => CreateTransferStatus::IdAlreadyFailed,
         S::DebitAccountNotFound | S::CreditAccountNotFound => CreateTransferStatus::UnknownAccount,
         S::PendingTransferNotFound => CreateTransferStatus::UnknownReservation,
         S::PendingTransferNotPending
@@ -417,13 +417,17 @@ mod tests {
             CreateTransferErrorKind::ExistsWithDifferentUserData32,
             CreateTransferErrorKind::ExistsWithDifferentLedger,
             CreateTransferErrorKind::ExistsWithDifferentCode,
-            CreateTransferErrorKind::IdAlreadyFailed,
         ] {
             assert_eq!(
                 map_transfer_status(status),
                 CreateTransferStatus::IdempotencyConflict
             );
         }
+        // A burnt id is its own status: the ledger retries a reservation under the next id.
+        assert_eq!(
+            map_transfer_status(CreateTransferErrorKind::IdAlreadyFailed),
+            CreateTransferStatus::IdAlreadyFailed
+        );
         assert_eq!(
             map_transfer_status(CreateTransferErrorKind::Exists),
             CreateTransferStatus::Exists

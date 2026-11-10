@@ -291,7 +291,7 @@ impl ChargeRequest {
         ))
     }
 
-    fn pending_transfer(&self) -> Transfer {
+    fn pending_transfer(&self, attempt: u32) -> Transfer {
         let debit = AccountSpec::new(self.debit.clone(), self.currency)
             .expect("validated charge")
             .id();
@@ -299,7 +299,7 @@ impl ChargeRequest {
             .expect("validated charge")
             .id();
         Transfer {
-            id: reserve_id(&self.event_id),
+            id: reserve_attempt_id(&self.event_id, attempt),
             debit_account_id: debit,
             credit_account_id: credit,
             amount: self.amount_minor,
@@ -709,6 +709,8 @@ pub enum CreateTransferStatus {
     AlreadySettled,
     Expired,
     InsufficientFunds,
+    /// TigerBeetle 0.16 remembers an id whose transfer failed (e.g. for lack of funds) and refuses it forever.
+    IdAlreadyFailed,
     Rejected(String),
 }
 
@@ -1041,31 +1043,62 @@ impl<T: Transport> Ledger<T> {
 
     pub async fn reserve(&self, request: &ChargeRequest) -> Result<Reservation, MoneyError> {
         request.validate()?;
-        let expected = request.pending_transfer();
-        if let Some(existing) = self.transport.lookup_transfer(expected.id).await? {
-            ensure_same_transfer(&existing, &expected)?;
-            return self
-                .reservation(&request.event_id, &request.tenant_id)
-                .await;
-        }
-        self.ensure_account(&AccountSpec::new(request.debit.clone(), request.currency)?)
-            .await?;
-        self.ensure_account(&AccountSpec::new(request.credit.clone(), request.currency)?)
-            .await?;
-        match self.transport.create_transfer(expected).await? {
-            CreateTransferStatus::Created => Ok(reservation_from_transfer(
-                request,
-                expected,
-                PostingState::Pending,
-            )),
-            CreateTransferStatus::Exists => {
-                let existing = self.lookup_transfer(expected.id).await?;
+        let mut accounts_ready = false;
+        // Attempt 0 is the original deterministic id. A reservation refused for lack of funds burns its id in
+        // TigerBeetle (IdAlreadyFailed), so the next attempt after a top-up uses the next id. Each attempt looks up
+        // before creating, so a replay finds the reservation already made and never reserves twice.
+        for attempt in 0..RESERVE_ATTEMPTS {
+            let expected = request.pending_transfer(attempt);
+            if let Some(existing) = self.transport.lookup_transfer(expected.id).await? {
                 ensure_same_transfer(&existing, &expected)?;
-                self.reservation(&request.event_id, &request.tenant_id)
-                    .await
+                return self
+                    .reservation(&request.event_id, &request.tenant_id)
+                    .await;
             }
-            status => Err(map_transfer_status(status)),
+            if !accounts_ready {
+                self.ensure_account(&AccountSpec::new(request.debit.clone(), request.currency)?)
+                    .await?;
+                self.ensure_account(&AccountSpec::new(request.credit.clone(), request.currency)?)
+                    .await?;
+                accounts_ready = true;
+            }
+            match self.transport.create_transfer(expected).await? {
+                CreateTransferStatus::Created => {
+                    return Ok(reservation_from_transfer(
+                        request,
+                        expected,
+                        PostingState::Pending,
+                    ))
+                }
+                CreateTransferStatus::Exists => {
+                    let existing = self.lookup_transfer(expected.id).await?;
+                    ensure_same_transfer(&existing, &expected)?;
+                    return self
+                        .reservation(&request.event_id, &request.tenant_id)
+                        .await;
+                }
+                CreateTransferStatus::IdAlreadyFailed => continue,
+                status => return Err(map_transfer_status(status)),
+            }
         }
+        Err(MoneyError::InvariantViolation(format!(
+            "reservation for {} failed {RESERVE_ATTEMPTS} times; resolve it by hand",
+            request.event_id
+        )))
+    }
+
+    /// The pending transfer reserving this event: the first attempt id that exists in the ledger.
+    async fn find_reservation(&self, event_id: &str) -> Result<Transfer, MoneyError> {
+        for attempt in 0..RESERVE_ATTEMPTS {
+            if let Some(found) = self
+                .transport
+                .lookup_transfer(reserve_attempt_id(event_id, attempt))
+                .await?
+            {
+                return Ok(found);
+            }
+        }
+        Err(MoneyError::UnknownReservation)
     }
 
     pub async fn post(&self, event_id: &str, tenant_id: &str) -> Result<Reservation, MoneyError> {
@@ -1083,7 +1116,7 @@ impl<T: Transport> Ledger<T> {
     ) -> Result<Reservation, MoneyError> {
         validate_id("event_id", event_id)?;
         validate_id("tenant_id", tenant_id)?;
-        let pending = self.lookup_transfer(reserve_id(event_id)).await?;
+        let pending = self.find_reservation(event_id).await?;
         ensure_pending_tenant(&pending, tenant_id)?;
         let state = self.current_state(&pending).await?;
         Ok(Reservation {
@@ -1108,7 +1141,7 @@ impl<T: Transport> Ledger<T> {
                 "settlement target cannot be pending".to_owned(),
             ));
         }
-        let pending = self.lookup_transfer(reserve_id(event_id)).await?;
+        let pending = self.find_reservation(event_id).await?;
         ensure_pending_tenant(&pending, tenant_id)?;
         let expected = settlement_transfer(&pending, target);
         if let Some(existing) = self.transport.lookup_transfer(expected.id).await? {
@@ -1250,7 +1283,9 @@ fn ensure_same_transfer(found: &Transfer, expected: &Transfer) -> Result<(), Mon
 
 fn map_transfer_status(status: CreateTransferStatus) -> MoneyError {
     match status {
-        CreateTransferStatus::IdempotencyConflict => MoneyError::IdempotencyConflict,
+        CreateTransferStatus::IdempotencyConflict | CreateTransferStatus::IdAlreadyFailed => {
+            MoneyError::IdempotencyConflict
+        }
         CreateTransferStatus::UnknownAccount => MoneyError::UnknownAccount,
         CreateTransferStatus::UnknownReservation => MoneyError::UnknownReservation,
         CreateTransferStatus::AlreadySettled => MoneyError::AlreadySettled,
@@ -1267,6 +1302,18 @@ fn map_transfer_status(status: CreateTransferStatus) -> MoneyError {
 
 pub fn reserve_id(event_id: &str) -> u128 {
     deterministic_id(&format!("volumeos:transfer:v1:reserve:{event_id}"))
+}
+
+/// How many ids one event may try for its reservation (each lack-of-funds refusal uses one up).
+pub const RESERVE_ATTEMPTS: u32 = 16;
+
+/// Attempt 0 is `reserve_id` itself, so reservations made before retries existed are still found.
+pub fn reserve_attempt_id(event_id: &str, attempt: u32) -> u128 {
+    if attempt == 0 {
+        reserve_id(event_id)
+    } else {
+        deterministic_id(&format!("volumeos:transfer:v1:reserve:{event_id}:retry:{attempt}"))
+    }
 }
 
 pub fn funding_id(event_id: &str) -> u128 {

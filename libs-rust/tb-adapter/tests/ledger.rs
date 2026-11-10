@@ -8,7 +8,7 @@ use volumeos_tb_adapter::ledger::{
     FxRevaluationRequest, Ledger, MoneyError, PostingState, ProviderCostRequest,
     SuspenseResolutionRequest, Transfer, TransferKind, Transport, TransportError, TransportFuture,
     ACCOUNT_DEBITS_MUST_NOT_EXCEED_CREDITS, TRANSFER_PENDING, TRANSFER_POST_PENDING,
-    TRANSFER_VOID_PENDING,
+    TRANSFER_VOID_PENDING, reserve_attempt_id,
 };
 
 #[derive(Default)]
@@ -17,6 +17,8 @@ struct MockState {
     transfers: HashMap<u128, Transfer>,
     states: HashMap<u128, PostingState>,
     expired: HashSet<u128>,
+    /// Like TigerBeetle 0.16: an id whose transfer failed for lack of funds can never be used again.
+    failed: HashSet<u128>,
 }
 
 /// Test-only transport seam. Production uses `TigerBeetleTransport`; this mock
@@ -83,6 +85,9 @@ impl Transport for MockTransport {
             if state.transfers.contains_key(&transfer.id) {
                 return Ok(CreateTransferStatus::Exists);
             }
+            if state.failed.contains(&transfer.id) {
+                return Ok(CreateTransferStatus::IdAlreadyFailed);
+            }
             if transfer.flags == 0 {
                 if !state.accounts.contains_key(&transfer.debit_account_id)
                     || !state.accounts.contains_key(&transfer.credit_account_id)
@@ -96,6 +101,7 @@ impl Transport for MockTransport {
                         .checked_add(transfer.amount)
                         .is_none_or(|value| value > debit.credits_posted)
                 {
+                    state.failed.insert(transfer.id);
                     return Ok(CreateTransferStatus::InsufficientFunds);
                 }
                 let debit = state.accounts.get_mut(&transfer.debit_account_id).unwrap();
@@ -118,7 +124,8 @@ impl Transport for MockTransport {
                         .checked_add(debit.debits_pending)
                         .and_then(|value| value.checked_add(transfer.amount));
                     if committed.is_none_or(|value| value > debit.credits_posted) {
-                        return Ok(CreateTransferStatus::InsufficientFunds);
+                        state.failed.insert(transfer.id);
+                    return Ok(CreateTransferStatus::InsufficientFunds);
                     }
                 }
                 let debit = state.accounts.get_mut(&transfer.debit_account_id).unwrap();
@@ -370,6 +377,32 @@ fn prepaid_reserves_cannot_overdraw_or_stack_beyond_funds() {
                 .available_minor,
             Some(20)
         );
+    });
+}
+
+#[test]
+fn a_reservation_refused_for_funds_succeeds_after_a_top_up() {
+    // TigerBeetle burns the id of a transfer refused for lack of funds; the retry must use a new id, and the
+    // reservation must still be found by its event for post, void and replays.
+    block_on(async {
+        let (ledger, world) = funded_ledger(3_000).await;
+        let request = charge(&world, "evt-short", "tenant-a", 4_000);
+        assert_eq!(ledger.reserve(&request).await, Err(MoneyError::InsufficientFunds));
+        assert_eq!(ledger.reserve(&request).await, Err(MoneyError::InsufficientFunds));
+
+        ledger.transport().fund(&world.settlement, &world.prepaid, 2_000);
+        let reserved = ledger.reserve(&request).await.unwrap();
+        assert_eq!(reserved.state, PostingState::Pending);
+        assert_eq!(reserved.transfer_id, reserve_attempt_id("evt-short", 2));
+        assert_eq!(ledger.reserve(&request).await.unwrap(), reserved); // replay: no second reservation
+        assert_eq!(ledger.reservation("evt-short", "tenant-a").await.unwrap(), reserved);
+
+        let posted = ledger.post("evt-short", "tenant-a").await.unwrap();
+        assert_eq!(posted.state, PostingState::Posted);
+        let balance = ledger.balance(&world.prepaid).await.unwrap();
+        assert_eq!(balance.available_minor, Some(1_000));
+        assert_eq!(balance.debits_posted, 4_000);
+        assert_eq!(balance.debits_pending, 0);
     });
 }
 
