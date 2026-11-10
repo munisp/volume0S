@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { allowed, can, needs, personaOf, rolesFromToken, sees } from './access.ts'
 import { byWaiting, countBy, describe, fromEngagement, fromOfferJob, matchesWork } from './workflows.ts'
 import { plainError } from './messages.ts'
+import { VolumeOSApi } from './api.ts'
 import type { EngagementSnapshot, OfferJobSnapshot } from './types.ts'
 
 const token = (claims: object) => `x.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.y`
@@ -101,4 +102,18 @@ test('refusals read as plain words', () => {
   assert.equal(plainError({ status: 409, code: 'conflict', message: 'Engagement ID already exists.' }), 'Engagement ID already exists.', 'specific server text is kept')
   assert.equal(plainError({ status: 503, code: 'money_service_unavailable', message: 'Money service is unavailable.' }),
     'Billing isn\'t running on this deployment, so this can\'t be done yet.')
+})
+
+test('a top-up sends the amount as a whole number of kobo, as the orchestrator requires', async () => {
+  const sent: unknown[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+    sent.push(JSON.parse(init.body))
+    return new Response(JSON.stringify({ status: 'awaiting_confirmation', checkout_url: 'https://checkout.example/x' }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const api = new VolumeOSApi('https://core', 'https://orch', async () => 'token')
+    await api.startTopup('paystack', 'ref-1', { amount_minor: '2500000', currency: 'NGN', customer_email: 'a@b.ng', redirect_url: 'https://x/cb' })
+    assert.equal((sent[0] as { amount_minor: unknown }).amount_minor, 2500000)
+  } finally { globalThis.fetch = realFetch }
 })

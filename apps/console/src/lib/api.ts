@@ -171,8 +171,12 @@ export class VolumeOSApi {
   }
 
   startTopup(provider: string, reference: string, input: Record<string, string>) {
+    // The orchestrator takes amount_minor as a whole number (pydantic StrictInt); a string was refused with
+    // "Check these fields: amount_minor", so no top-up could start from the console. Amounts are capped at
+    // 10^12 kobo, well inside the integers a JavaScript number holds exactly.
+    const body = { ...input, amount_minor: Number(input.amount_minor) }
     return this.request<Checkout>(this.orchestratorUrl, `/v1/billing/topups/${encodeURIComponent(provider)}/${encodeURIComponent(reference)}`, {
-      method: 'POST', body: input,
+      method: 'POST', body,
     })
   }
 
