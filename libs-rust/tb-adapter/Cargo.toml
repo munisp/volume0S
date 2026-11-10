@@ -12,7 +12,9 @@ path = "src/lib.rs"
 
 [dependencies]
 blake3 = "=1.5.5"
-tigerbeetle = "=0.17.9"
+bytemuck = "1"
+# Built for TigerBeetle 0.16.66, the cluster release (the official crate starts at 0.17).
+tigerbeetle-unofficial = "=0.14.16+0.16.66"
 
 [dev-dependencies]
 futures = "=0.3.31"

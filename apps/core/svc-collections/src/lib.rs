@@ -41,20 +41,29 @@ impl ProviderClients {
         clients: BTreeMap<&'static str, Arc<dyn ProviderClient>>,
         webhook_secrets: BTreeMap<&'static str, String>,
     ) -> Result<Self, ApiError> {
+        // Run with the providers that are configured (a deployment may only have Paystack); every configured
+        // provider must have its webhook secret, and at least one must be configured.
+        if clients.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "provider_configuration",
+                "at least one collection provider must be configured",
+            ));
+        }
         for provider in [
             Provider::Paystack,
             Provider::Flutterwave,
             Provider::Moniepoint,
         ] {
-            if !clients.contains_key(provider.as_str())
-                || webhook_secrets
+            if clients.contains_key(provider.as_str())
+                && webhook_secrets
                     .get(provider.as_str())
                     .is_none_or(|secret| secret.is_empty())
             {
                 return Err(ApiError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "provider_configuration",
-                    "all collection providers and webhook secrets must be configured",
+                    "every configured collection provider needs its webhook secret",
                 ));
             }
         }
@@ -66,53 +75,63 @@ impl ProviderClients {
 
     pub fn from_env() -> Result<Self, ApiError> {
         let mut clients: BTreeMap<&'static str, Arc<dyn ProviderClient>> = BTreeMap::new();
-        clients.insert(
-            "paystack",
-            Arc::new(PaystackClient::new(
-                &env_or("PAYSTACK_API_URL", "https://api.paystack.co"),
-                required_env("PAYSTACK_API_SECRET")?,
-            )?),
-        );
-        clients.insert(
-            "flutterwave",
-            Arc::new(FlutterwaveClient::new(
-                &env_or("FLUTTERWAVE_API_URL", "https://api.flutterwave.cloud"),
-                &env_or(
-                    "FLUTTERWAVE_TOKEN_URL",
-                    "https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token",
-                ),
-                required_env("FLUTTERWAVE_CLIENT_ID")?,
-                required_env("FLUTTERWAVE_CLIENT_SECRET")?,
-            )?),
-        );
-        clients.insert(
-            "moniepoint",
-            Arc::new(MoniepointClient::new(
-                &env_or("MONIEPOINT_API_URL", "https://api.monnify.com"),
-                required_env("MONIEPOINT_CLIENT_KEY")?,
-                required_env("MONIEPOINT_CLIENT_SECRET")?,
-                required_env("MONIEPOINT_CONTRACT_CODE")?,
-            )?),
-        );
-        let secrets = BTreeMap::from([
-            ("paystack", required_env("PAYSTACK_WEBHOOK_SECRET")?),
-            ("flutterwave", required_env("FLUTTERWAVE_WEBHOOK_SECRET")?),
-            ("moniepoint", required_env("MONIEPOINT_WEBHOOK_SECRET")?),
-        ]);
+        let mut secrets: BTreeMap<&'static str, String> = BTreeMap::new();
+        if let Some([secret, webhook]) = provider_env(["PAYSTACK_API_SECRET", "PAYSTACK_WEBHOOK_SECRET"])? {
+            clients.insert(
+                "paystack",
+                Arc::new(PaystackClient::new(&env_or("PAYSTACK_API_URL", "https://api.paystack.co"), secret)?),
+            );
+            secrets.insert("paystack", webhook);
+        }
+        if let Some([id, client_secret, webhook]) =
+            provider_env(["FLUTTERWAVE_CLIENT_ID", "FLUTTERWAVE_CLIENT_SECRET", "FLUTTERWAVE_WEBHOOK_SECRET"])?
+        {
+            clients.insert(
+                "flutterwave",
+                Arc::new(FlutterwaveClient::new(
+                    &env_or("FLUTTERWAVE_API_URL", "https://api.flutterwave.cloud"),
+                    &env_or(
+                        "FLUTTERWAVE_TOKEN_URL",
+                        "https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token",
+                    ),
+                    id,
+                    client_secret,
+                )?),
+            );
+            secrets.insert("flutterwave", webhook);
+        }
+        if let Some([key, client_secret, contract, webhook]) = provider_env([
+            "MONIEPOINT_CLIENT_KEY",
+            "MONIEPOINT_CLIENT_SECRET",
+            "MONIEPOINT_CONTRACT_CODE",
+            "MONIEPOINT_WEBHOOK_SECRET",
+        ])? {
+            clients.insert(
+                "moniepoint",
+                Arc::new(MoniepointClient::new(
+                    &env_or("MONIEPOINT_API_URL", "https://api.monnify.com"),
+                    key,
+                    client_secret,
+                    contract,
+                )?),
+            );
+            secrets.insert("moniepoint", webhook);
+        }
         Self::new(clients, secrets)
     }
 
-    fn client(&self, provider: Provider) -> &dyn ProviderClient {
+    fn client(&self, provider: Provider) -> Result<&dyn ProviderClient, ApiError> {
         self.clients
             .get(provider.as_str())
-            .expect("validated provider registry")
-            .as_ref()
+            .map(|client| client.as_ref())
+            .ok_or_else(|| not_configured(provider))
     }
 
-    fn secret(&self, provider: Provider) -> &str {
+    fn secret(&self, provider: Provider) -> Result<&str, ApiError> {
         self.webhook_secrets
             .get(provider.as_str())
-            .expect("validated webhook secrets")
+            .map(String::as_str)
+            .ok_or_else(|| not_configured(provider))
     }
 }
 
@@ -358,6 +377,7 @@ async fn start_checkout<T: Transport + 'static>(
         return Err(ApiError::invalid("collection amount must be non-zero"));
     }
     let currency = Currency::from(request.currency);
+    let client = state.providers.client(provider)?;
     let expectation = CollectionExpectation {
         tenant_id: tenant.clone(),
         amount_minor,
@@ -367,9 +387,7 @@ async fn start_checkout<T: Transport + 'static>(
         .store
         .put_expectation(provider, &reference, &expectation)
         .await?;
-    let checkout = state
-        .providers
-        .client(provider)
+    let checkout = client
         .initialize(&CheckoutRequest {
             provider,
             tenant_id: tenant,
@@ -593,7 +611,7 @@ async fn webhook<T: Transport + 'static>(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     let Some(notification) =
-        verify_and_parse(provider, &body, signature, state.providers.secret(provider))?
+        verify_and_parse(provider, &body, signature, state.providers.secret(provider)?)?
     else {
         return Ok((StatusCode::ACCEPTED, Json(json!({"status":"ignored"}))));
     };
@@ -604,7 +622,7 @@ async fn webhook<T: Transport + 'static>(
     let receipt = process_collection(
         &notification,
         expectation.as_ref(),
-        state.providers.client(provider),
+        state.providers.client(provider)?,
         &state.ledger,
     )
     .await?;
@@ -751,6 +769,79 @@ fn required_env(name: &str) -> Result<String, ApiError> {
     })
 }
 
+/// All of a provider's settings, or none (not configured). Some but not all is a configuration error.
+fn provider_env<const N: usize>(names: [&str; N]) -> Result<Option<[String; N]>, ApiError> {
+    let values = names.map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()));
+    match values.iter().filter(|value| value.is_some()).count() {
+        0 => Ok(None),
+        count if count == N => Ok(Some(values.map(|value| value.unwrap_or_default()))),
+        _ => Err(ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "provider_configuration",
+            format!("{} is only partly configured", names[0].split('_').next().unwrap_or("a provider")),
+        )),
+    }
+}
+
+fn not_configured(provider: Provider) -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "provider_not_configured",
+        format!("{} payments aren't set up on this deployment", provider.as_str()),
+    )
+}
+
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
+#[cfg(test)]
+mod provider_configuration_tests {
+    use super::*;
+
+    const ALL: [&str; 9] = [
+        "PAYSTACK_API_SECRET", "PAYSTACK_WEBHOOK_SECRET", "FLUTTERWAVE_CLIENT_ID", "FLUTTERWAVE_CLIENT_SECRET",
+        "FLUTTERWAVE_WEBHOOK_SECRET", "MONIEPOINT_CLIENT_KEY", "MONIEPOINT_CLIENT_SECRET",
+        "MONIEPOINT_CONTRACT_CODE", "MONIEPOINT_WEBHOOK_SECRET",
+    ];
+
+    fn with_env(set: &[(&str, &str)]) -> Result<ProviderClients, ApiError> {
+        for name in ALL {
+            std::env::remove_var(name);
+        }
+        for (name, value) in set {
+            std::env::set_var(name, value);
+        }
+        ProviderClients::from_env()
+    }
+
+    // One test, because these mutate the process environment.
+    #[test]
+    fn runs_with_any_fully_configured_subset_of_providers() {
+        let paystack_only = with_env(&[("PAYSTACK_API_SECRET", "sk_test_x"), ("PAYSTACK_WEBHOOK_SECRET", "sk_test_x")])
+            .expect("Paystack alone is enough");
+        assert!(paystack_only.client(Provider::Paystack).is_ok());
+        let missing = paystack_only.client(Provider::Moniepoint).err().expect("Moniepoint isn't configured");
+        assert_eq!(missing.code, "provider_not_configured");
+        assert!(paystack_only.secret(Provider::Flutterwave).is_err());
+
+        assert_eq!(with_env(&[]).err().expect("no provider").code, "provider_configuration");
+        assert_eq!(
+            with_env(&[("PAYSTACK_API_SECRET", "sk_test_x")]).err().expect("half-configured").code,
+            "provider_configuration"
+        );
+        assert_eq!(
+            with_env(&[
+                ("PAYSTACK_API_SECRET", "sk_test_x"), ("PAYSTACK_WEBHOOK_SECRET", "sk_test_x"),
+                ("MONIEPOINT_CLIENT_KEY", "k"),
+            ])
+            .err()
+            .expect("a second provider half-configured")
+            .code,
+            "provider_configuration"
+        );
+        for name in ALL {
+            std::env::remove_var(name);
+        }
+    }
 }

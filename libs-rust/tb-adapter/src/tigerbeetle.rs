@@ -1,9 +1,19 @@
-//! Live transport backed by TigerBeetle's official Rust client.
+//! Live transport backed by a TigerBeetle Rust client.
 //!
 //! Construction fails closed when cluster configuration is absent. No local or
 //! relational fallback is provided for financial balances.
+//!
+//! The client is `tigerbeetle-unofficial` built for TigerBeetle 0.16.66, the release the
+//! cluster runs: a TigerBeetle cluster refuses clients newer than itself, and the official
+//! Rust client starts at 0.17. Replica addresses are IP:port (the 0.16 client does not
+//! resolve host names). Accounts and transfers are built from zeroed raw records so that no
+//! builder assertion can panic on an identifier.
 
-use tigerbeetle as tb;
+use bytemuck::Zeroable;
+use tigerbeetle_unofficial as tb;
+use tb::error::{
+    CreateAccountErrorKind, CreateAccountsError, CreateTransferErrorKind, CreateTransfersError,
+};
 
 use crate::ledger::{
     Account, AccountQuery, CreateAccountStatus, CreateTransferStatus, Transfer, Transport,
@@ -34,7 +44,50 @@ impl TigerBeetleTransport {
         })?;
         let addresses = std::env::var("TIGERBEETLE_ADDRESSES")
             .map_err(|_| TransportError::new("TIGERBEETLE_ADDRESSES is not configured"))?;
-        Self::connect(cluster_id, &addresses)
+        Self::connect(cluster_id, &resolve_addresses(&addresses)?)
+    }
+}
+
+/// The client only takes IP:port, but the shared cluster is addressed by its StatefulSet hostnames
+/// (`tigerbeetle-0.tigerbeetle-headless...:3000`), as every other app on it does. Resolve each name once at start-up,
+/// keeping the replica order (it must match the cluster's replica numbering). IPs pass through unchanged.
+pub fn resolve_addresses(addresses: &str) -> Result<String, TransportError> {
+    use std::net::{IpAddr, ToSocketAddrs};
+    let mut resolved = Vec::new();
+    for entry in addresses.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+        // A bare port means this machine, which the client understands itself.
+        if entry.parse::<u16>().is_ok() {
+            resolved.push(entry.to_owned());
+            continue;
+        }
+        let (host, port) = entry
+            .rsplit_once(':')
+            .ok_or_else(|| TransportError::new(format!("replica address {entry} needs a port")))?;
+        if host.parse::<IpAddr>().is_ok() {
+            resolved.push(entry.to_owned());
+            continue;
+        }
+        let ip = (host, port.parse::<u16>().map_err(|_| TransportError::new(format!("bad port in {entry}")))?)
+            .to_socket_addrs()
+            .map_err(|error| TransportError::new(format!("cannot resolve {host}: {error}")))?
+            .find(|address| address.is_ipv4())
+            .ok_or_else(|| TransportError::new(format!("{host} has no IPv4 address")))?;
+        resolved.push(ip.to_string());
+    }
+    Ok(resolved.join(","))
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::resolve_addresses;
+
+    #[test]
+    fn names_become_ips_in_order_and_ips_pass_through() {
+        assert_eq!(resolve_addresses("10.0.0.1:3000, 10.0.0.2:3001").unwrap(), "10.0.0.1:3000,10.0.0.2:3001");
+        assert_eq!(resolve_addresses("localhost:3000,10.0.0.9:3000").unwrap(), "127.0.0.1:3000,10.0.0.9:3000");
+        assert_eq!(resolve_addresses("3000").unwrap(), "3000");
+        assert!(resolve_addresses("no-port-here").is_err());
+        assert!(resolve_addresses("name.invalid:3000").is_err());
     }
 }
 
@@ -45,17 +98,16 @@ impl Transport for TigerBeetleTransport {
     ) -> TransportFuture<'_, Result<CreateAccountStatus, TransportError>> {
         Box::pin(async move {
             let event = account_to_tb(account);
-            let results = self
-                .client
-                .create_accounts(&[event])
-                .await
-                .map_err(|error| TransportError::new(error.to_string()))?;
-            if results.len() != 1 {
-                return Err(TransportError::new(
-                    "create_accounts returned an invalid result count",
-                ));
+            match self.client.create_accounts(vec![event]).await {
+                Ok(()) => Ok(CreateAccountStatus::Created),
+                Err(CreateAccountsError::Api(errors)) => match errors.as_slice() {
+                    [only] => Ok(map_account_status(only.kind())),
+                    _ => Err(TransportError::new(
+                        "create_accounts returned an invalid result count",
+                    )),
+                },
+                Err(error) => Err(TransportError::new(error.to_string())),
             }
-            Ok(map_account_status(results[0].status))
         })
     }
 
@@ -66,7 +118,7 @@ impl Transport for TigerBeetleTransport {
         Box::pin(async move {
             let mut results = self
                 .client
-                .lookup_accounts(&[id])
+                .lookup_accounts(vec![id])
                 .await
                 .map_err(|error| TransportError::new(error.to_string()))?;
             if results.len() > 1 {
@@ -88,16 +140,15 @@ impl Transport for TigerBeetleTransport {
                     "account query limit must be between 1 and 8189",
                 ));
             }
+            let mut filter = tb::QueryFilter::new(query.limit);
+            let raw = filter.as_raw_mut();
+            raw.user_data_128 = query.user_data_128;
+            raw.ledger = query.ledger;
+            raw.code = query.code;
+            raw.timestamp_min = query.timestamp_min;
             let accounts = self
                 .client
-                .query_accounts(tb::QueryFilter {
-                    user_data_128: query.user_data_128,
-                    ledger: query.ledger,
-                    code: query.code,
-                    timestamp_min: query.timestamp_min,
-                    limit: query.limit,
-                    ..tb::QueryFilter::default()
-                })
+                .query_accounts(Box::new(filter))
                 .await
                 .map_err(|error| TransportError::new(error.to_string()))?;
             Ok(accounts.into_iter().map(account_from_tb).collect())
@@ -110,17 +161,16 @@ impl Transport for TigerBeetleTransport {
     ) -> TransportFuture<'_, Result<CreateTransferStatus, TransportError>> {
         Box::pin(async move {
             let event = transfer_to_tb(transfer);
-            let results = self
-                .client
-                .create_transfers(&[event])
-                .await
-                .map_err(|error| TransportError::new(error.to_string()))?;
-            if results.len() != 1 {
-                return Err(TransportError::new(
-                    "create_transfers returned an invalid result count",
-                ));
+            match self.client.create_transfers(vec![event]).await {
+                Ok(()) => Ok(CreateTransferStatus::Created),
+                Err(CreateTransfersError::Api(errors)) => match errors.as_slice() {
+                    [only] => Ok(map_transfer_status(only.kind())),
+                    _ => Err(TransportError::new(
+                        "create_transfers returned an invalid result count",
+                    )),
+                },
+                Err(error) => Err(TransportError::new(error.to_string())),
             }
-            Ok(map_transfer_status(results[0].status))
         })
     }
 
@@ -131,7 +181,7 @@ impl Transport for TigerBeetleTransport {
         Box::pin(async move {
             let mut results = self
                 .client
-                .lookup_transfers(&[id])
+                .lookup_transfers(vec![id])
                 .await
                 .map_err(|error| TransportError::new(error.to_string()))?;
             if results.len() > 1 {
@@ -145,75 +195,74 @@ impl Transport for TigerBeetleTransport {
 }
 
 fn account_to_tb(account: Account) -> tb::Account {
-    tb::Account {
-        id: account.id,
-        user_data_128: account.user_data_128,
-        user_data_64: account.user_data_64,
-        user_data_32: account.user_data_32,
-        ledger: account.ledger,
-        code: account.code,
-        flags: tb::AccountFlags(account.flags),
-        ..tb::Account::default()
-    }
+    let mut raw = tb::account::Raw::zeroed();
+    raw.id = account.id;
+    raw.user_data_128 = account.user_data_128;
+    raw.user_data_64 = account.user_data_64;
+    raw.user_data_32 = account.user_data_32;
+    raw.ledger = account.ledger;
+    raw.code = account.code;
+    raw.flags = account.flags;
+    tb::Account::from_raw(raw)
 }
 
 fn account_from_tb(account: tb::Account) -> Account {
+    let raw = account.as_raw();
     Account {
-        id: account.id,
-        debits_pending: account.debits_pending,
-        debits_posted: account.debits_posted,
-        credits_pending: account.credits_pending,
-        credits_posted: account.credits_posted,
-        user_data_128: account.user_data_128,
-        user_data_64: account.user_data_64,
-        user_data_32: account.user_data_32,
-        ledger: account.ledger,
-        code: account.code,
-        flags: account.flags.0,
-        timestamp: account.timestamp,
+        id: raw.id,
+        debits_pending: raw.debits_pending,
+        debits_posted: raw.debits_posted,
+        credits_pending: raw.credits_pending,
+        credits_posted: raw.credits_posted,
+        user_data_128: raw.user_data_128,
+        user_data_64: raw.user_data_64,
+        user_data_32: raw.user_data_32,
+        ledger: raw.ledger,
+        code: raw.code,
+        flags: raw.flags,
+        timestamp: raw.timestamp,
     }
 }
 
 fn transfer_to_tb(transfer: Transfer) -> tb::Transfer {
-    tb::Transfer {
-        id: transfer.id,
-        debit_account_id: transfer.debit_account_id,
-        credit_account_id: transfer.credit_account_id,
-        amount: transfer.amount,
-        pending_id: transfer.pending_id,
-        user_data_128: transfer.user_data_128,
-        user_data_64: transfer.user_data_64,
-        user_data_32: transfer.user_data_32,
-        timeout: transfer.timeout,
-        ledger: transfer.ledger,
-        code: transfer.code,
-        flags: tb::TransferFlags(transfer.flags),
-        ..tb::Transfer::default()
-    }
+    let mut raw = tb::transfer::Raw::zeroed();
+    raw.id = transfer.id;
+    raw.debit_account_id = transfer.debit_account_id;
+    raw.credit_account_id = transfer.credit_account_id;
+    raw.amount = transfer.amount;
+    raw.pending_id = transfer.pending_id;
+    raw.user_data_128 = transfer.user_data_128;
+    raw.user_data_64 = transfer.user_data_64;
+    raw.user_data_32 = transfer.user_data_32;
+    raw.timeout = transfer.timeout;
+    raw.ledger = transfer.ledger;
+    raw.code = transfer.code;
+    raw.flags = transfer.flags;
+    tb::Transfer::from_raw(raw)
 }
 
 fn transfer_from_tb(transfer: tb::Transfer) -> Transfer {
+    let raw = transfer.as_raw();
     Transfer {
-        id: transfer.id,
-        debit_account_id: transfer.debit_account_id,
-        credit_account_id: transfer.credit_account_id,
-        amount: transfer.amount,
-        pending_id: transfer.pending_id,
-        user_data_128: transfer.user_data_128,
-        user_data_64: transfer.user_data_64,
-        user_data_32: transfer.user_data_32,
-        timeout: transfer.timeout,
-        ledger: transfer.ledger,
-        code: transfer.code,
-        flags: transfer.flags.0,
-        timestamp: transfer.timestamp,
+        id: raw.id,
+        debit_account_id: raw.debit_account_id,
+        credit_account_id: raw.credit_account_id,
+        amount: raw.amount,
+        pending_id: raw.pending_id,
+        user_data_128: raw.user_data_128,
+        user_data_64: raw.user_data_64,
+        user_data_32: raw.user_data_32,
+        timeout: raw.timeout,
+        ledger: raw.ledger,
+        code: raw.code,
+        flags: raw.flags,
+        timestamp: raw.timestamp,
     }
 }
 
-fn map_account_status(status: tb::CreateAccountStatus) -> CreateAccountStatus {
-    use tb::CreateAccountStatus as S;
+fn map_account_status(status: CreateAccountErrorKind) -> CreateAccountStatus {
+    use CreateAccountErrorKind as S;
     match status {
-        S::Created => CreateAccountStatus::Created,
         S::Exists => CreateAccountStatus::Exists,
         S::ExistsWithDifferentFlags
         | S::ExistsWithDifferentUserData128
@@ -221,14 +270,13 @@ fn map_account_status(status: tb::CreateAccountStatus) -> CreateAccountStatus {
         | S::ExistsWithDifferentUserData32
         | S::ExistsWithDifferentLedger
         | S::ExistsWithDifferentCode => CreateAccountStatus::IdempotencyConflict,
-        other => CreateAccountStatus::Rejected(format!("TigerBeetle rejected account: {other}")),
+        other => CreateAccountStatus::Rejected(format!("TigerBeetle rejected account: {other:?}")),
     }
 }
 
-fn map_transfer_status(status: tb::CreateTransferStatus) -> CreateTransferStatus {
-    use tb::CreateTransferStatus as S;
+fn map_transfer_status(status: CreateTransferErrorKind) -> CreateTransferStatus {
+    use CreateTransferErrorKind as S;
     match status {
-        S::Created => CreateTransferStatus::Created,
         S::Exists => CreateTransferStatus::Exists,
         S::ExistsWithDifferentFlags
         | S::ExistsWithDifferentPendingId
@@ -249,7 +297,7 @@ fn map_transfer_status(status: tb::CreateTransferStatus) -> CreateTransferStatus
         | S::PendingTransferAlreadyVoided => CreateTransferStatus::AlreadySettled,
         S::PendingTransferExpired => CreateTransferStatus::Expired,
         S::ExceedsCredits | S::ExceedsDebits => CreateTransferStatus::InsufficientFunds,
-        other => CreateTransferStatus::Rejected(format!("TigerBeetle rejected transfer: {other}")),
+        other => CreateTransferStatus::Rejected(format!("TigerBeetle rejected transfer: {other:?}")),
     }
 }
 
@@ -265,15 +313,15 @@ mod tests {
     #[test]
     fn financial_rejections_are_not_reported_as_success() {
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::PendingTransferExpired),
+            map_transfer_status(CreateTransferErrorKind::PendingTransferExpired),
             CreateTransferStatus::Expired
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::ExceedsCredits),
+            map_transfer_status(CreateTransferErrorKind::ExceedsCredits),
             CreateTransferStatus::InsufficientFunds
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::ExistsWithDifferentAmount),
+            map_transfer_status(CreateTransferErrorKind::ExistsWithDifferentAmount),
             CreateTransferStatus::IdempotencyConflict
         );
     }
@@ -294,14 +342,13 @@ mod tests {
             flags: 8,
             timestamp: 9,
         };
-        let stored_account = tb::Account {
-            debits_pending: account.debits_pending,
-            debits_posted: account.debits_posted,
-            credits_pending: account.credits_pending,
-            credits_posted: account.credits_posted,
-            timestamp: account.timestamp,
-            ..account_to_tb(account)
-        };
+        let mut stored_account = account_to_tb(account.clone());
+        let raw = stored_account.as_raw_mut();
+        raw.debits_pending = account.debits_pending;
+        raw.debits_posted = account.debits_posted;
+        raw.credits_pending = account.credits_pending;
+        raw.credits_posted = account.credits_posted;
+        raw.timestamp = account.timestamp;
         assert_eq!(account_from_tb(stored_account), account);
         let transfer = Transfer {
             id: u128::MAX - 2,
@@ -318,10 +365,8 @@ mod tests {
             flags: 2,
             timestamp: 8,
         };
-        let stored_transfer = tb::Transfer {
-            timestamp: transfer.timestamp,
-            ..transfer_to_tb(transfer)
-        };
+        let mut stored_transfer = transfer_to_tb(transfer.clone());
+        stored_transfer.as_raw_mut().timestamp = transfer.timestamp;
         assert_eq!(transfer_from_tb(stored_transfer), transfer);
     }
 
@@ -340,12 +385,12 @@ mod tests {
         std::env::remove_var("TIGERBEETLE_ADDRESSES");
 
         for status in [
-            tb::CreateAccountStatus::ExistsWithDifferentFlags,
-            tb::CreateAccountStatus::ExistsWithDifferentUserData128,
-            tb::CreateAccountStatus::ExistsWithDifferentUserData64,
-            tb::CreateAccountStatus::ExistsWithDifferentUserData32,
-            tb::CreateAccountStatus::ExistsWithDifferentLedger,
-            tb::CreateAccountStatus::ExistsWithDifferentCode,
+            CreateAccountErrorKind::ExistsWithDifferentFlags,
+            CreateAccountErrorKind::ExistsWithDifferentUserData128,
+            CreateAccountErrorKind::ExistsWithDifferentUserData64,
+            CreateAccountErrorKind::ExistsWithDifferentUserData32,
+            CreateAccountErrorKind::ExistsWithDifferentLedger,
+            CreateAccountErrorKind::ExistsWithDifferentCode,
         ] {
             assert_eq!(
                 map_account_status(status),
@@ -353,30 +398,26 @@ mod tests {
             );
         }
         assert_eq!(
-            map_account_status(tb::CreateAccountStatus::Created),
-            CreateAccountStatus::Created
-        );
-        assert_eq!(
-            map_account_status(tb::CreateAccountStatus::Exists),
+            map_account_status(CreateAccountErrorKind::Exists),
             CreateAccountStatus::Exists
         );
         assert!(matches!(
-            map_account_status(tb::CreateAccountStatus::ReservedField),
+            map_account_status(CreateAccountErrorKind::ReservedField),
             CreateAccountStatus::Rejected(_)
         ));
         for status in [
-            tb::CreateTransferStatus::ExistsWithDifferentFlags,
-            tb::CreateTransferStatus::ExistsWithDifferentPendingId,
-            tb::CreateTransferStatus::ExistsWithDifferentTimeout,
-            tb::CreateTransferStatus::ExistsWithDifferentDebitAccountId,
-            tb::CreateTransferStatus::ExistsWithDifferentCreditAccountId,
-            tb::CreateTransferStatus::ExistsWithDifferentAmount,
-            tb::CreateTransferStatus::ExistsWithDifferentUserData128,
-            tb::CreateTransferStatus::ExistsWithDifferentUserData64,
-            tb::CreateTransferStatus::ExistsWithDifferentUserData32,
-            tb::CreateTransferStatus::ExistsWithDifferentLedger,
-            tb::CreateTransferStatus::ExistsWithDifferentCode,
-            tb::CreateTransferStatus::IdAlreadyFailed,
+            CreateTransferErrorKind::ExistsWithDifferentFlags,
+            CreateTransferErrorKind::ExistsWithDifferentPendingId,
+            CreateTransferErrorKind::ExistsWithDifferentTimeout,
+            CreateTransferErrorKind::ExistsWithDifferentDebitAccountId,
+            CreateTransferErrorKind::ExistsWithDifferentCreditAccountId,
+            CreateTransferErrorKind::ExistsWithDifferentAmount,
+            CreateTransferErrorKind::ExistsWithDifferentUserData128,
+            CreateTransferErrorKind::ExistsWithDifferentUserData64,
+            CreateTransferErrorKind::ExistsWithDifferentUserData32,
+            CreateTransferErrorKind::ExistsWithDifferentLedger,
+            CreateTransferErrorKind::ExistsWithDifferentCode,
+            CreateTransferErrorKind::IdAlreadyFailed,
         ] {
             assert_eq!(
                 map_transfer_status(status),
@@ -384,43 +425,39 @@ mod tests {
             );
         }
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::Created),
-            CreateTransferStatus::Created
-        );
-        assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::Exists),
+            map_transfer_status(CreateTransferErrorKind::Exists),
             CreateTransferStatus::Exists
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::DebitAccountNotFound),
+            map_transfer_status(CreateTransferErrorKind::DebitAccountNotFound),
             CreateTransferStatus::UnknownAccount
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::CreditAccountNotFound),
+            map_transfer_status(CreateTransferErrorKind::CreditAccountNotFound),
             CreateTransferStatus::UnknownAccount
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::PendingTransferNotFound),
+            map_transfer_status(CreateTransferErrorKind::PendingTransferNotFound),
             CreateTransferStatus::UnknownReservation
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::PendingTransferNotPending),
+            map_transfer_status(CreateTransferErrorKind::PendingTransferNotPending),
             CreateTransferStatus::AlreadySettled
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::PendingTransferAlreadyPosted),
+            map_transfer_status(CreateTransferErrorKind::PendingTransferAlreadyPosted),
             CreateTransferStatus::AlreadySettled
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::PendingTransferAlreadyVoided),
+            map_transfer_status(CreateTransferErrorKind::PendingTransferAlreadyVoided),
             CreateTransferStatus::AlreadySettled
         );
         assert_eq!(
-            map_transfer_status(tb::CreateTransferStatus::ExceedsDebits),
+            map_transfer_status(CreateTransferErrorKind::ExceedsDebits),
             CreateTransferStatus::InsufficientFunds
         );
         assert!(matches!(
-            map_transfer_status(tb::CreateTransferStatus::ReservedFlag),
+            map_transfer_status(CreateTransferErrorKind::ReservedFlag),
             CreateTransferStatus::Rejected(_)
         ));
     }
