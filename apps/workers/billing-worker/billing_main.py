@@ -522,6 +522,9 @@ class FxCloseWorkflow:
 
 
 async def main() -> None:
+    # Apply the billing schema at startup. It used to be applied lazily on the first billing activity, so on a
+    # deployment where no cycle had run yet the documents service found no invoices/receipts tables at all.
+    await get_store()
     client = await Client.connect(
         os.environ.get("TEMPORAL_HOSTPORT", "temporal-frontend.ops.svc.cluster.local:7233"),
         namespace=os.environ.get("TEMPORAL_NAMESPACE", "volumeos"),
