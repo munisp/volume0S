@@ -40,6 +40,7 @@ func (a *API) routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 	mux.Handle("POST /v1/tenants/current", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.createTenant))))
+	mux.Handle("GET /v1/tenants", a.auth.middleware(http.HandlerFunc(a.listTenants)))
 	mux.Handle("GET /v1/tenants/current", a.auth.middleware(a.role("reader", http.HandlerFunc(a.getTenant))))
 	mux.Handle("POST /v1/tenants/current/transitions", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.transitionTenant))))
 	mux.Handle("PUT /v1/tenants/current/outbound-suspension", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.suspendOutbound))))
@@ -88,6 +89,16 @@ func (a *API) createTenant(w http.ResponseWriter, r *http.Request) {
 		err = a.store.CreateTenant(r.Context(), tenant)
 	}
 	respond(w, r, http.StatusCreated, tenant, err)
+}
+
+// listTenants is the agency's client list: platform operators only, never a client or a business's own staff.
+func (a *API) listTenants(w http.ResponseWriter, r *http.Request) {
+	if !claimsFrom(r.Context()).Platform {
+		writeError(w, http.StatusForbidden, "forbidden", "only platform operators can list businesses")
+		return
+	}
+	list, err := a.store.ListTenants(r.Context())
+	respond(w, r, http.StatusOK, map[string]any{"tenants": list}, err)
 }
 
 func (a *API) getTenant(w http.ResponseWriter, r *http.Request) {

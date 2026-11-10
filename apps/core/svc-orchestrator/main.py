@@ -20,8 +20,9 @@ from temporalio.exceptions import TemporalError, WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from assets import QAAssetError, S3QAAssets
-from auth import AuthenticationError, Claims, OIDCAuthenticator
+from auth import AuthenticationError, Claims, OIDCAuthenticator, scope_claims
 from money import MoneyServiceError, MoneyServices
+from people import ROLES, PeopleService, PeopleServiceError
 from workflows import TemporalWorkflows
 
 ID_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
@@ -211,6 +212,8 @@ async def lifespan(app: FastAPI):
         app.state.qa_assets = S3QAAssets(os.environ.get("ASSET_BUCKET", ""), store, expiry)
     if app.state.money is None and app.state.configure_money:
         app.state.money = MoneyServices.from_env()
+    if app.state.people is None and app.state.configure_money:
+        app.state.people = PeopleService.from_env()
     yield
 
 
@@ -220,7 +223,8 @@ def error(message: str, status: int, code: str) -> HTTPException:
 
 async def current_claims(request: Request) -> Claims:
     try:
-        return await request.app.state.authenticator.authenticate(request.headers.get("Authorization"))
+        claims = await request.app.state.authenticator.authenticate(request.headers.get("Authorization"))
+        return scope_claims(claims, request.headers.get("X-VolumeOS-Tenant"))
     except AuthenticationError as exc:
         raise error("Valid OIDC credentials and tenant scope are required.", 401, "unauthorized") from exc
 
@@ -252,12 +256,34 @@ def sorted_snapshots(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(snapshots, key=lambda item: str(item.get("updated_at", "")), reverse=True)
 
 
-def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any = None, money: Any = None) -> FastAPI:
+class PersonCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    first_name: str = Field(min_length=1, max_length=80)
+    last_name: str = Field(min_length=1, max_length=80)
+    role: Literal[ROLES]  # type: ignore[valid-type]
+
+
+class PersonUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal[ROLES] | None = None  # type: ignore[valid-type]
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def something_changes(self) -> "PersonUpdate":
+        if self.role is None and self.enabled is None:
+            raise ValueError("role or enabled is required")
+        return self
+
+
+def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any = None, money: Any = None,
+               people: Any = None) -> FastAPI:
     app = FastAPI(title="VolumeOS Orchestrator", version="0.5.0", lifespan=lifespan)
     app.state.workflows = workflows
     app.state.authenticator = authenticator
     app.state.qa_assets = qa_assets
     app.state.money = money
+    app.state.people = people
     app.state.configure_money = workflows is None
 
     @app.middleware("http")
@@ -288,6 +314,10 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     async def temporal_unavailable(_request: Request, _exc: TemporalError):
         return JSONResponse({"error": {"code": "orchestrator_unavailable", "message": "Workflow service is unavailable."}}, status_code=503)
 
+    @app.exception_handler(PeopleServiceError)
+    async def people_error(_request: Request, exc: PeopleServiceError):
+        return JSONResponse({"error": {"code": exc.code, "message": str(exc)}}, status_code=exc.status)
+
     @app.exception_handler(MoneyServiceError)
     async def money_error(_request: Request, exc: MoneyServiceError):
         return JSONResponse({"error": {"code": exc.code, "message": str(exc)}}, status_code=exc.status)
@@ -308,6 +338,33 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         if app.state.money is None:
             raise error("Money services are not configured.", 503, "money_not_configured")
         return app.state.money
+
+    def people_service() -> Any:
+        if app.state.people is None:
+            raise error("Managing people isn't set up on this deployment.", 503, "people_not_configured")
+        return app.state.people
+
+    def check_grant(claims: Claims, role: str | None) -> None:
+        # A business's own super operator runs its team; only the agency's platform operators create super operators.
+        if role == "super-operator" and not claims.platform:
+            raise error("Only platform operators can give someone the super operator role.", 403, "forbidden")
+
+    @app.get("/v1/people")
+    async def people(claims: Claims = Depends(need("super-operator"))):
+        return await people_service().list(claims.tenant_id)
+
+    @app.post("/v1/people", status_code=201)
+    async def add_person(body: PersonCreate, claims: Claims = Depends(need("super-operator"))):
+        check_grant(claims, body.role)
+        return await people_service().create(claims.tenant_id, body.model_dump())
+
+    @app.patch("/v1/people/{person_id}")
+    async def update_person(person_id: Annotated[str, Path(pattern=r"^[a-f0-9-]{36}$")], body: PersonUpdate,
+                            claims: Claims = Depends(need("super-operator"))):
+        check_grant(claims, body.role)
+        if person_id == claims.actor:
+            raise error("You can't change your own role or access.", 409, "own_access")
+        return await people_service().update(claims.tenant_id, person_id, body.model_dump(exclude_none=True))
 
     @app.get("/v1/campaigns")
     async def campaigns(claims: Claims = Depends(need("reader"))):

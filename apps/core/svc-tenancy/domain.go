@@ -39,6 +39,28 @@ type Tenant struct {
 	Subscriptions     []Subscription `json:"subscriptions"`
 }
 
+// TenantSummary is one row of the agency's client list.
+type TenantSummary struct {
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Slug              string    `json:"slug"`
+	State             Lifecycle `json:"state"`
+	OutboundSuspended bool      `json:"outbound_suspended"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	Workspaces        int       `json:"workspaces"`
+	Offers            []string  `json:"offers"`
+}
+
+func summarize(t Tenant) TenantSummary {
+	offers := []string{}
+	for _, sub := range t.Subscriptions {
+		offers = append(offers, sub.Offer)
+	}
+	return TenantSummary{ID: t.ID, Name: t.Name, Slug: t.Slug, State: t.State, OutboundSuspended: t.OutboundSuspended,
+		CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt, Workspaces: len(t.Workspaces), Offers: offers}
+}
+
 type Workspace struct {
 	ID        string    `json:"id"`
 	TenantID  string    `json:"tenant_id"`
@@ -72,6 +94,8 @@ type Store interface {
 	Ready(context.Context) error
 	CreateTenant(context.Context, Tenant) error
 	Tenant(context.Context, string) (Tenant, error)
+	// ListTenants is every business, for the agency's platform operators only (newest first).
+	ListTenants(context.Context) ([]TenantSummary, error)
 	TransitionTenant(context.Context, string, Lifecycle, int64, string) (Tenant, error)
 	SetOutboundSuspended(context.Context, string, bool, string) (Tenant, error)
 	CreateWorkspace(context.Context, string, string) (Workspace, error)

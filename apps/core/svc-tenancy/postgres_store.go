@@ -171,6 +171,31 @@ func (s *PostgresStore) Tenant(ctx context.Context, id string) (Tenant, error) {
 	return t, err
 }
 
+// ListTenants reads across businesses on purpose: it is reached only by platform operators (see API.listTenants).
+func (s *PostgresStore) ListTenants(ctx context.Context) ([]TenantSummary, error) {
+	list := []TenantSummary{}
+	err := s.tx(ctx, PlatformTenant, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT t.id,t.name,t.slug,t.state,t.outbound_suspended,t.created_at,t.updated_at,
+			(SELECT count(*) FROM workspaces w WHERE w.tenant_id=t.id),
+			COALESCE((SELECT array_agg(s.offer ORDER BY s.offer) FROM subscriptions s WHERE s.tenant_id=t.id), '{}')
+			FROM tenants t ORDER BY t.created_at DESC`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var row TenantSummary
+			if err := rows.Scan(&row.ID, &row.Name, &row.Slug, &row.State, &row.OutboundSuspended, &row.CreatedAt,
+				&row.UpdatedAt, &row.Workspaces, &row.Offers); err != nil {
+				return err
+			}
+			list = append(list, row)
+		}
+		return rows.Err()
+	})
+	return list, err
+}
+
 func (s *PostgresStore) TransitionTenant(ctx context.Context, id string, to Lifecycle, version int64, reason string) (Tenant, error) {
 	var result Tenant
 	err := s.tx(ctx, id, func(tx pgx.Tx) error {

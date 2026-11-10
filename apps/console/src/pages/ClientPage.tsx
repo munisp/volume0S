@@ -8,6 +8,7 @@ import { byRecent, countBy, KIND_LABEL } from '../lib/workflows'
 import type { Tenant } from '../lib/types'
 import { Confirm, Empty, Field, Modal, Note, OfferMark, PageHead, Panel, RoleNote, Segmented, Status, Submit, When, WorkStatus } from '../components/ui'
 import { dateTime } from '../lib/format'
+import { PeoplePanel } from './PeoplePanel'
 
 const LIFECYCLE: Record<Tenant['state'], { label: string; state: 'running' | 'done' | 'stopped' | 'needs-review' }> = {
   prospect: { label: 'Prospect', state: 'needs-review' }, onboarding: { label: 'Onboarding', state: 'running' },
@@ -17,7 +18,7 @@ const LIFECYCLE: Record<Tenant['state'], { label: string; state: 'running' | 'do
 const NEXT: Record<Tenant['state'], Tenant['state'][]> = {
   prospect: ['onboarding', 'offboarded'], onboarding: ['active', 'offboarded'], active: ['paused', 'offboarded'], paused: ['active', 'offboarded'], offboarded: [],
 }
-type Tab = 'profile' | 'services' | 'workspaces' | 'activity'
+type Tab = 'profile' | 'people' | 'services' | 'workspaces' | 'activity'
 
 export function ClientPage() {
   const { tenant, tenantLoad, tenantError, roles, api, setTenant, reloadTenant, notify, offerName } = useSession()
@@ -112,7 +113,9 @@ export function ClientPage() {
     </div>
 
     <Segmented label="Section" value={tab} onChange={setTab} options={[
-      { id: 'profile', label: 'Profile' }, { id: 'services', label: 'Services', count: subscriptions.length },
+      { id: 'profile', label: 'Profile' },
+      ...(allowed(roles, 'managePeople') ? [{ id: 'people' as Tab, label: 'People' }] : []),
+      { id: 'services', label: 'Services', count: subscriptions.length },
       { id: 'workspaces', label: 'Workspaces', count: workspaces.length }, { id: 'activity', label: 'Activity', count: items.length }]} />
 
     {tab === 'profile' && <div className="grid-2">
@@ -132,6 +135,8 @@ export function ClientPage() {
         <p className="body-copy">The business record holds a name, short name and status only. Category, contact details, location and verification documents have no fields in the API yet, so they aren't shown or invented here.</p>
       </Panel>
     </div>}
+
+    {tab === 'people' && allowed(roles, 'managePeople') && <PeoplePanel businessName={tenant.name} />}
 
     {tab === 'services' && <Panel title="Subscribed services" actions={<Link className="button button-secondary small" to="/catalogue">Open catalogue</Link>} flush>
       {subscriptions.length === 0 ? <Empty title="No services yet">Subscribe this business to a priced offer from the catalogue.</Empty>

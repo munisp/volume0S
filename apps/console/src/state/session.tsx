@@ -4,9 +4,16 @@ import type { User } from 'oidc-client-ts'
 import { VolumeOSApi, ApiError } from '../lib/api'
 import { VolumeOSAuth } from '../lib/auth'
 import { defaultConfig, loadRuntimeConfig, oidcConfigured, type RuntimeConfig } from '../lib/config'
-import { personaOf, rolesFromToken } from '../lib/access'
+import { isPlatform, personaOf, rolesFromToken, tenantFromToken } from '../lib/access'
 import type { Tenant } from '../lib/types'
 import { SessionContext, errorText, type Load, type Session, type Toast, type ToastKind } from './session-context'
+
+const ACTING_KEY = 'volumeos.actingTenant'
+
+/** Per browser and tab-independent; a convenience only (the servers decide what the header may reach). */
+function savedActingTenant(): string | null {
+  try { return window.localStorage.getItem(ACTING_KEY) } catch { return null }
+}
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
@@ -32,18 +39,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return null
     })
   }, [])
-  const api = useMemo(() => new VolumeOSApi(
-    config.coreApiUrl, config.orchestratorApiUrl, async () => {
-      const token = await (auth?.accessToken() ?? Promise.resolve(null))
-      if (!token) endSession()
-      return token
-    }, config.conversationsApiUrl,
-  ), [config, auth, endSession])
+  const [actingTenant] = useState<string | null>(savedActingTenant)
+  const api = useMemo(() => {
+    const client = new VolumeOSApi(
+      config.coreApiUrl, config.orchestratorApiUrl, async () => {
+        const token = await (auth?.accessToken() ?? Promise.resolve(null))
+        if (!token) endSession()
+        return token
+      }, config.conversationsApiUrl,
+    )
+    client.actingTenant = actingTenant
+    return client
+  }, [config, auth, endSession, actingTenant])
   useEffect(() => auth?.onUser(renewed => setUser(renewed)), [auth])
 
   // Display only (the servers verify the token): read roles from the claims even when the token is about to be renewed.
   const roles = useMemo(() => rolesFromToken(user?.access_token), [user])
   const persona = user ? personaOf(roles) : 'none'
+  const platform = isPlatform(roles, tenantFromToken(user?.access_token))
 
   const notify = useCallback((kind: ToastKind, message: string) => setToast({ kind, message, id: Date.now() }), [])
 
@@ -67,6 +80,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const identity = new VolumeOSAuth(runtime)
       setAuth(identity)
       const client = new VolumeOSApi(runtime.coreApiUrl, runtime.orchestratorApiUrl, () => identity.accessToken(), runtime.conversationsApiUrl)
+      client.actingTenant = savedActingTenant()
       // The public price list loads for everyone, signed in or not.
       void client.offers().then(
         result => active && setCatalogue({ offers: result.offers, bundles: result.bundles, priceBook: result.price_book, load: 'ok', error: null }),
@@ -85,8 +99,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (!active) return
       setUser(live)
       if (current && !live) setSessionEnded(true)
-      if (live) await loadTenant(client)
-      else setTenantLoad('missing')
+      // A platform operator who hasn't chosen a business has none to load: they start on the Clients page.
+      const platformWithoutBusiness = live && isPlatform(rolesFromToken(live.access_token), tenantFromToken(live.access_token)) && !client.actingTenant
+      if (live && !platformWithoutBusiness) await loadTenant(client)
+      else if (live) client.actingTenant = null
+      if (!live || platformWithoutBusiness) setTenantLoad('missing')
       if (returning && current) navigateRef.current(VolumeOSAuth.returnTo(current), { replace: true })
       setReady(true)
     })()
@@ -106,6 +123,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const value: Session = {
     ready, config, signInAvailable: oidcConfigured(config), sessionEnded, user, roles, persona, api,
+    platform, actingTenant: platform ? actingTenant : null,
+    switchTenant: (tenantId, path = tenantId ? '/client' : '/clients') => {
+      try {
+        if (tenantId) window.localStorage.setItem(ACTING_KEY, tenantId)
+        else window.localStorage.removeItem(ACTING_KEY)
+      } catch { /* private mode: the choice lasts until the reload only */ }
+      window.location.assign(path)
+    },
     tenant, tenantLoad, tenantError,
     reloadTenant: () => loadTenant(api),
     setTenant: next => { setTenantState(next); setTenantLoad('ok') },

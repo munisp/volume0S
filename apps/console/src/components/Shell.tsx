@@ -14,7 +14,7 @@ function initials(name: string) {
 }
 
 export function Shell({ groups, crumbs, children, footnote }: { groups: NavGroup[]; crumbs: { label: string; to?: string }[]; children: ReactNode; footnote?: ReactNode }) {
-  const { user, roles, tenant, tenantLoad, signOut, toast, dismissToast } = useSession()
+  const { user, roles, tenant, tenantLoad, signOut, toast, dismissToast, platform, actingTenant } = useSession()
   const pwa = usePwa()
   const location = useLocation()
   // Each remembers the page it was opened on, so navigating closes it without an effect.
@@ -40,9 +40,10 @@ export function Shell({ groups, crumbs, children, footnote }: { groups: NavGroup
     <a className="skip-link" href="#main">Skip to content</a>
     <aside className="rail" aria-label="VolumeOS">
       <Link to="/" className="rail-brand" aria-label="VolumeOS home"><Mark /><span><strong>VolumeOS</strong><small>Naira Volume operations</small></span></Link>
-      <div className="rail-scope" title="Every screen shows this business only. Your sign-in is scoped to it.">
-        <span>Business</span>
-        <strong>{tenant?.name ?? (tenantLoad === 'loading' ? 'Loading…' : 'No business record yet')}</strong>
+      <div className="rail-scope" title={platform ? 'Every screen shows this client only. Switch from the client list.' : 'Every screen shows this business only. Your sign-in is scoped to it.'}>
+        <span>{platform ? 'Working on' : 'Business'}</span>
+        <strong>{platform && !actingTenant ? 'No client chosen' : tenant?.name ?? (tenantLoad === 'loading' ? 'Loading…' : 'No business record yet')}</strong>
+        {platform && <Link to="/clients" className="rail-switch">{actingTenant ? 'Switch client' : 'Choose a client'}</Link>}
       </div>
       <nav aria-label="Main">
         {groups.map((group, index) => <div className="nav-group" key={group.label ?? index}>

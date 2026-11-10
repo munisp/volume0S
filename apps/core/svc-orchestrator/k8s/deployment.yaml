@@ -47,6 +47,9 @@ spec:
               valueFrom: {configMapKeyRef: {name: volumeos-money, key: document-service-url}}
             - name: VOLUMEOS_SERVICE_TOKEN
               valueFrom: {secretKeyRef: {name: svc-orchestrator, key: service-token}}
+            # People management (Keycloak sign-ins) goes through svc-provisioning; optional, the API answers 503 without it.
+            - name: PROVISIONING_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: provisioning-url, optional: true}}
           envFrom:
             - secretRef: {name: svc-orchestrator}
           readinessProbe:

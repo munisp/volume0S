@@ -40,6 +40,18 @@ export type Tenant = {
   subscriptions?: Subscription[] | null
 }
 
+/** One row of the agency's client list (platform operators only). */
+export type TenantSummary = {
+  id: string; name: string; slug: string; state: Tenant['state']; outbound_suspended: boolean
+  created_at: string; updated_at: string; workspaces: number; offers: string[]
+}
+
+/** A sign-in of one business (Keycloak user), with its single VolumeOS role. */
+export type Person = {
+  id: string; username: string; email: string; first_name: string; last_name: string
+  enabled: boolean; roles: string[]; created_at: number; must_set_password: boolean
+}
+
 export type Workspace = { id: string; tenant_id: string; name: string; created_at?: string }
 export type Subscription = { id: string; tenant_id: string; offer: string; tier: string; created_at?: string }
 

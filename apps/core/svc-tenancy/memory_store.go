@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,17 @@ func (s *MemoryStore) Tenant(_ context.Context, id string) (Tenant, error) {
 		return Tenant{}, ErrNotFound
 	}
 	return cloneTenant(t), nil
+}
+
+func (s *MemoryStore) ListTenants(context.Context) ([]TenantSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list := make([]TenantSummary, 0, len(s.tenants))
+	for _, t := range s.tenants {
+		list = append(list, summarize(t))
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
+	return list, nil
 }
 
 func (s *MemoryStore) TransitionTenant(_ context.Context, id string, to Lifecycle, version int64, _ string) (Tenant, error) {

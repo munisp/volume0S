@@ -14,6 +14,23 @@ export const STAFF_ROLES = new Set(['super-operator', 'delivery', 'sales', 'anal
 const IGNORED = /^(default-roles-|offline_access$|uma_authorization$)/
 
 export type Roles = ReadonlySet<string>
+
+/** The business in the token (display only; the servers verify it). */
+export function tenantFromToken(token: string | null | undefined): string | null {
+  if (!token) return null
+  try {
+    const part = token.split('.')[1] ?? ''
+    const json = JSON.parse(globalThis.atob(part.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(part.length / 4) * 4, '='))) as { tenant_id?: unknown }
+    return typeof json.tenant_id === 'string' ? json.tenant_id : null
+  } catch {
+    return null
+  }
+}
+
+/** The agency's own operators: token business "platform" and the super operator role (servers: scopeClaims). */
+export function isPlatform(roles: Roles, tenant: string | null): boolean {
+  return tenant === 'platform' && roles.has('super-operator')
+}
 export type Persona = 'operator' | 'client' | 'none'
 
 /** Decodes the roles from a JWT access token (the `roles` claim plus Keycloak realm roles). Never verifies: display only. */
@@ -47,6 +64,7 @@ export function personaOf(roles: Roles): Persona {
 /** Every action the console offers, with the role(s) the API requires for it (any one suffices). */
 export const ACTIONS = {
   createTenant: ['super-operator'],
+  managePeople: ['super-operator'],
   transitionTenant: ['super-operator'],
   suspendOutbound: ['super-operator'],
   updateSuppression: ['super-operator'],

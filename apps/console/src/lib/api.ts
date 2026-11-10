@@ -1,7 +1,7 @@
 import type {
   ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignSnapshot,
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
-  StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace,
+  StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace, TenantSummary, Person,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
 } from './types'
 import { plainError } from './messages.ts'
@@ -25,6 +25,9 @@ export class VolumeOSApi {
   private orchestratorUrl: string
   private conversationsUrl: string
   private token: () => Promise<string | null>
+  /** Platform operators only: the business they are working on, sent as X-VolumeOS-Tenant. The servers ignore it for
+   *  anyone else, so it can never widen a client's or a business's own staff's access. */
+  actingTenant: string | null = null
 
   constructor(coreUrl: string, orchestratorUrl: string, token: () => Promise<string | null>, conversationsUrl = '') {
     this.coreUrl = coreUrl
@@ -43,21 +46,40 @@ export class VolumeOSApi {
 
   tenant() { return this.request<Tenant>(this.coreUrl, '/v1/tenants/current') }
 
-  createTenant(name: string, slug: string) {
-    return this.request<Tenant>(this.coreUrl, '/v1/tenants/current', { method: 'POST', body: { name, slug } })
+  /** `tenant` (platform operators): create the record of a business other than the one being viewed. */
+  createTenant(name: string, slug: string, tenant?: string) {
+    return this.request<Tenant>(this.coreUrl, '/v1/tenants/current', { method: 'POST', body: { name, slug }, tenant })
   }
 
   /** Version-guarded: if the record changed since it was read, the server refuses (409) instead of overwriting. */
-  transitionTenant(to: string, version: number, reason: string) {
-    return this.request<Tenant>(this.coreUrl, '/v1/tenants/current/transitions', { method: 'POST', body: { to, version, reason } })
+  transitionTenant(to: string, version: number, reason: string, tenant?: string) {
+    return this.request<Tenant>(this.coreUrl, '/v1/tenants/current/transitions', { method: 'POST', body: { to, version, reason }, tenant })
+  }
+
+  /** Every business: platform operators only. */
+  tenants() {
+    return this.request<{ tenants: TenantSummary[] }>(this.coreUrl, '/v1/tenants', { tenant: '' })
+  }
+
+  people() {
+    return this.request<{ people: Person[] }>(this.orchestratorUrl, '/v1/people')
+  }
+
+  /** Creates the sign-in with a one-time password, returned once, that the person replaces at first sign-in. */
+  addPerson(input: { email: string; first_name: string; last_name: string; role: string }, tenant?: string) {
+    return this.request<{ person: Person; temporary_password: string }>(this.orchestratorUrl, '/v1/people', { method: 'POST', body: input, tenant })
+  }
+
+  updatePerson(id: string, change: { role?: string; enabled?: boolean }) {
+    return this.request<{ person: Person }>(this.orchestratorUrl, `/v1/people/${encodeURIComponent(id)}`, { method: 'PATCH', body: change })
   }
 
   createWorkspace(name: string) {
     return this.request<Workspace>(this.coreUrl, '/v1/workspaces', { method: 'POST', body: { name } })
   }
 
-  createSubscription(offer: string, tier: string) {
-    return this.request<Subscription>(this.coreUrl, '/v1/subscriptions', { method: 'POST', body: { offer, tier } })
+  createSubscription(offer: string, tier: string, tenant?: string) {
+    return this.request<Subscription>(this.coreUrl, '/v1/subscriptions', { method: 'POST', body: { offer, tier }, tenant })
   }
 
   setOutboundSuspension(suspended: boolean, reason: string) {
@@ -275,6 +297,8 @@ export class VolumeOSApi {
   private async request<T>(base: string, path: string, options: {
     method?: string
     body?: unknown
+    /** Business to act on (platform operators); '' sends none, undefined uses actingTenant. */
+    tenant?: string
   } = {}, authenticated = true): Promise<T> {
     if (!base) throw new ApiError('This API is not configured for the current deployment.')
     const headers: Record<string, string> = { Accept: 'application/json' }
@@ -282,6 +306,8 @@ export class VolumeOSApi {
       const accessToken = await this.token()
       if (!accessToken) throw new ApiError('Sign in with the tenant-scoped OIDC account to continue.', 401)
       headers.Authorization = `Bearer ${accessToken}`
+      const scope = options.tenant ?? this.actingTenant
+      if (scope) headers['X-VolumeOS-Tenant'] = scope
     }
     if (options.body !== undefined) headers['Content-Type'] = 'application/json'
     const response = await fetch(base + path, {

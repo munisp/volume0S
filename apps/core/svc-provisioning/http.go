@@ -33,6 +33,9 @@ func (a *API) routes() http.Handler {
 	mux.Handle("POST /v1/tenants", a.authenticate(http.HandlerFunc(a.createIdentity)))
 	mux.Handle("DELETE /v1/tenants/{tenant}", a.authenticate(http.HandlerFunc(a.deleteIdentity)))
 	mux.Handle("POST /v1/tenant-channels", a.authenticate(http.HandlerFunc(a.validateChannel)))
+	mux.Handle("GET /v1/people", a.authenticate(http.HandlerFunc(a.listPeople)))
+	mux.Handle("POST /v1/people", a.authenticate(http.HandlerFunc(a.createPerson)))
+	mux.Handle("PATCH /v1/people/{person}", a.authenticate(http.HandlerFunc(a.updatePerson)))
 	return recoverPanic(logRequests(mux))
 }
 

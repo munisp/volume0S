@@ -5,7 +5,7 @@ import { ACTIONS, allowed, roleLabel, type Action } from '../lib/access'
 import { Confirm, Empty, Field, Modal, Note, PageHead, Panel, RoleNote, Status, Submit } from '../components/ui'
 
 const ACTION_LABEL: Record<Action, string> = {
-  createTenant: 'Create the business record', transitionTenant: 'Change business status (incl. offboarding)', suspendOutbound: 'Suspend or restore outbound messages',
+  createTenant: 'Create the business record', managePeople: 'Add people and change their roles', transitionTenant: 'Change business status (incl. offboarding)', suspendOutbound: 'Suspend or restore outbound messages',
   updateSuppression: 'Suppress or restore a recipient', createWorkspace: 'Create delivery workspaces', subscribe: 'Subscribe the business to an offer',
   startCampaign: 'Start campaigns', approveCampaign: 'Approve campaigns', startStudioPack: 'Start Studio packs', reviewStudioPack: 'QA Studio images',
   startOfferJob: 'Start offer jobs', reviewOfferJob: 'Review offer-job artifacts and front-desk replies', startEngagement: 'Start engagements', reviewEngagement: 'Approve or reject engagement plans',

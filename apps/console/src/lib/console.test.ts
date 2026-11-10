@@ -1,7 +1,7 @@
 // Run: node --test src/lib/   (Node 24 strips the types itself; no extra test dependency)
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { allowed, can, needs, personaOf, rolesFromToken, sees } from './access.ts'
+import { allowed, can, isPlatform, needs, personaOf, rolesFromToken, sees, tenantFromToken } from './access.ts'
 import { byWaiting, countBy, describe, fromEngagement, fromOfferJob, matchesWork } from './workflows.ts'
 import { plainError } from './messages.ts'
 import { VolumeOSApi } from './api.ts'
@@ -116,4 +116,36 @@ test('a top-up sends the amount as a whole number of kobo, as the orchestrator r
     await api.startTopup('paystack', 'ref-1', { amount_minor: '2500000', currency: 'NGN', customer_email: 'a@b.ng', redirect_url: 'https://x/cb' })
     assert.equal((sent[0] as { amount_minor: unknown }).amount_minor, 2500000)
   } finally { globalThis.fetch = realFetch }
+})
+
+
+test('platform operators are the agency\'s super operators, nobody else', () => {
+  assert.equal(tenantFromToken(token({ tenant_id: 'platform' })), 'platform')
+  assert.equal(tenantFromToken('nonsense'), null)
+  assert.ok(isPlatform(new Set(['super-operator']), 'platform'))
+  assert.ok(!isPlatform(new Set(['super-operator']), 'demo-tenant'), 'a business\'s own super operator is not platform')
+  assert.ok(!isPlatform(new Set(['delivery']), 'platform'))
+  assert.ok(allowed(new Set(['super-operator']), 'managePeople'))
+  assert.ok(!allowed(new Set(['delivery']), 'managePeople'))
+})
+
+test('the business header goes only where it was chosen', async () => {
+  const sent: (string | null)[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    sent.push(new Headers(init.headers).get('X-VolumeOS-Tenant'))
+    return new Response('{}', { status: 200 })
+  }) as typeof fetch
+  try {
+    const api = new VolumeOSApi('https://core', 'https://orch', async () => 'tok')
+    await api.tenant()                                   // nothing chosen: no header
+    api.actingTenant = 'acme-ltd'
+    await api.tenant()                                   // the chosen business
+    await api.createTenant('New Co', 'new-co', 'new-co') // an explicit business wins
+    await api.tenants()                                  // the client list never carries one
+    await api.offers()                                   // public calls never carry one
+    assert.deepEqual(sent, [null, 'acme-ltd', 'new-co', null, null])
+  } finally {
+    globalThis.fetch = realFetch
+  }
 })

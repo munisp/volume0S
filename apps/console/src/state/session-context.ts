@@ -18,6 +18,12 @@ export type Session = {
   user: User | null
   roles: Roles
   persona: Persona
+  /** The agency's own operator (token business "platform" + super operator): sees every client and switches between them. */
+  platform: boolean
+  /** Platform operators: the business being worked on, or null (choose one on the Clients page). */
+  actingTenant: string | null
+  /** Platform operators: work on another business. Reloads the console so every page starts clean for it. */
+  switchTenant: (tenantId: string | null, path?: string) => void
   api: VolumeOSApi
   tenant: Tenant | null
   tenantLoad: Load

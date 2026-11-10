@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react'
 import { matchPath, Navigate, Route, Routes, useLocation } from 'react-router'
 import {
   BookOpen, Building2, ClipboardCheck, Gauge, Inbox, Landmark, Layers3, LineChart, Loader2, MessagesSquare,
-  Megaphone, Image as ImageIcon, PackageCheck, Settings2, UserRound, Wallet, Workflow,
+  Megaphone, Image as ImageIcon, PackageCheck, Settings2, UserRound, Wallet, Workflow, Users,
 } from 'lucide-react'
 import { SessionProvider } from './state/session'
 import { useSession } from './state/session-context'
@@ -16,6 +16,7 @@ import { ApprovalsPage } from './pages/ApprovalsPage'
 import { OperationsPage } from './pages/OperationsPage'
 import { CataloguePage } from './pages/CataloguePage'
 import { ClientPage } from './pages/ClientPage'
+import { ClientsPage } from './pages/ClientsPage'
 import { CampaignsPage } from './pages/CampaignsPage'
 import { StudioPage } from './pages/StudioPage'
 import { EngagementsPage, FinancePage, FrontDeskPage, OfferJobsPage } from './pages/ServicePages'
@@ -47,6 +48,15 @@ const OPERATOR_ROUTES: RouteDef[] = [
   { path: '/billing/callback', title: 'Payment submitted', section: 'Finance', sectionTo: '/finance', element: <PaymentReturnPage backTo="/finance" backLabel="Back to finance" /> },
 ]
 
+/** Platform operators only (the agency's own staff). */
+const PLATFORM_ROUTES: RouteDef[] = [
+  { path: '/clients', title: 'Clients', section: 'Agency', element: <ClientsPage /> },
+  { path: '/account', title: 'Your access', section: 'Account', element: <AccountPage /> },
+]
+
+/** Inside a client, the agency pages a platform operator still reaches (the rest are already operator routes). */
+const AGENCY_ROUTES = PLATFORM_ROUTES.filter(route => route.path === '/clients')
+
 const CLIENT_ROUTES: RouteDef[] = [
   { path: '/', title: 'Home', element: <ClientHomePage /> },
   { path: '/services', title: 'Services', element: <CataloguePage readOnly /> },
@@ -73,12 +83,27 @@ function Guard({ route }: { route: RouteDef }) {
   return <>{route.element}</>
 }
 
-function OperatorApp() {
+/** A platform operator who hasn't picked a client yet: only the client list (and their own access) make sense. */
+function PlatformStartApp() {
   const { roles } = useSession()
+  const crumbs = useCrumbs(PLATFORM_ROUTES)
+  return <Shell groups={[{ label: 'Agency', items: [{ to: '/clients', label: 'Clients', icon: Users }] }]} crumbs={crumbs}
+    footnote={<>Signed in as <strong>{[...roles].map(roleLabel).join(', ')}</strong> · platform</>}>
+    <Routes>
+      {PLATFORM_ROUTES.map(route => <Route key={route.path} path={route.path} element={route.element} />)}
+      <Route path="*" element={<Navigate to="/clients" replace />} />
+    </Routes>
+  </Shell>
+}
+
+function OperatorApp() {
+  const { roles, platform, actingTenant } = useSession()
   const { items } = useOperations()
-  const crumbs = useCrumbs(OPERATOR_ROUTES)
+  const crumbs = useCrumbs(platform ? OPERATOR_ROUTES.concat(AGENCY_ROUTES) : OPERATOR_ROUTES)
   const waiting = items.filter(item => item.state === 'needs-review').length
+  if (platform && !actingTenant) return <PlatformStartApp />
   const groups: NavGroup[] = [
+    ...(platform ? [{ label: 'Agency', items: [{ to: '/clients', label: 'Clients', icon: Users }] }] : []),
     { items: [{ to: '/', label: 'Overview', icon: Gauge, end: true }] },
     { label: 'Work', items: [
       ...(sees(roles, 'approvals') ? [{ to: '/approvals', label: 'Approvals', icon: Inbox, count: waiting }] : []),
@@ -99,9 +124,10 @@ function OperatorApp() {
     ...(sees(roles, 'intelligence') ? [{ label: 'Insight', items: [{ to: '/intelligence', label: 'Intelligence', icon: LineChart, soon: 'Not built' }] }] : []),
     ...(sees(roles, 'administration') ? [{ label: 'Admin', items: [{ to: '/admin', label: 'Administration', icon: Settings2 }] }] : []),
   ].filter(group => group.items.length > 0)
-  return <Shell groups={groups} crumbs={crumbs} footnote={<>Signed in as <strong>{[...roles].map(roleLabel).join(', ') || 'no role'}</strong></>}>
+  return <Shell groups={groups} crumbs={crumbs} footnote={<>Signed in as <strong>{[...roles].map(roleLabel).join(', ') || 'no role'}</strong>{platform ? ' · platform' : ''}</>}>
     <Routes>
       {OPERATOR_ROUTES.map(route => <Route key={route.path} path={route.path} element={<Guard route={route} />} />)}
+      {platform && AGENCY_ROUTES.map(route => <Route key={route.path} path={route.path} element={route.element} />)}
       <Route path="/onboarding" element={<Navigate to="/client" replace />} />
       <Route path="/offers" element={<Navigate to="/catalogue" replace />} />
       <Route path="/billing" element={<Navigate to="/finance" replace />} />
