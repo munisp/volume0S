@@ -54,10 +54,13 @@ class TemporalWorkflows:
             raise RuntimeError("Temporal frontend health check failed")
 
     async def start(self, workflow_type: str, argument: dict[str, Any],
-                    workflow_id: str, task_queue: str) -> None:
+                    workflow_id: str, task_queue: str, retry_failed: bool = False) -> None:
+        # retry_failed lets a FAILED run be started again under the same id (never a running or completed one);
+        # only for workflows whose every side effect is keyed by deterministic ids, so a rerun can't double-charge.
         await self.client.start_workflow(
             workflow_type, argument, id=workflow_id, task_queue=task_queue,
-            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            id_reuse_policy=(WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY if retry_failed
+                             else WorkflowIDReusePolicy.REJECT_DUPLICATE),
         )
 
     async def query(self, workflow_id: str, run_id: str | None = None,

@@ -528,7 +528,9 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         }
         workflow_id = f"billing:{claims.tenant_id}:{body.subscription_id}:{body.cycle}"
         try:
-            await app.state.workflows.start("BillingCycleWorkflow", argument, workflow_id, "billing-v1")
+            # A cycle that failed (e.g. on a fault since fixed) can be run again: its invoice number, reservation and
+            # posting are keyed by tenant/subscription/cycle, so the rerun reuses them instead of charging twice.
+            await app.state.workflows.start("BillingCycleWorkflow", argument, workflow_id, "billing-v1", retry_failed=True)
         except WorkflowAlreadyStartedError as exc:
             raise error("Billing cycle already exists.", 409, "conflict") from exc
         return {"status": "accepted", "subscription_id": body.subscription_id, "cycle": body.cycle}

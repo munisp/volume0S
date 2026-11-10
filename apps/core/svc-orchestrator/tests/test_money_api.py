@@ -133,6 +133,7 @@ def test_billing_cycle_start_uses_fixed_dunning_policy_and_workflow_identity(mon
     assert argument["dunning_delays_seconds"] == [259200, 604800, 1209600]
     assert workflow_id == "billing:tenant-a:sub-1:2026-10"
     assert queue == "billing-v1"
+    assert workflows.retry_failed == [True]  # a failed cycle can be rerun; its money steps are idempotent
 
 
 def test_cycle_feed_is_tenant_prefixed(money_services):

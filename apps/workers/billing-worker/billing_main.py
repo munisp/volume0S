@@ -103,6 +103,13 @@ async def service_request(
         return await client.request(method, base + path, json=payload, headers=headers)
 
 
+def _error_code(response: httpx.Response) -> str | None:
+    try:
+        return (response.json().get("error") or {}).get("code")
+    except (ValueError, AttributeError):
+        return None
+
+
 def parse_reservation(response: httpx.Response, tenant_id: str, event_id: str) -> ReservationResult:
     body = response.json()
     if not isinstance(body, dict):
@@ -222,6 +229,11 @@ async def deliver_document(value: BillingCycleInput, kind: str, document_id: str
         deterministic_id("document-delivery", value.tenant_id, kind, document_id, value.billing_whatsapp),
         {"channel": "whatsapp", "recipient": value.billing_whatsapp},
     )
+    if response.status_code == 503 and _error_code(response) == "delivery_not_configured":
+        # A deployment without WhatsApp still issues, stores and shows the PDFs; sending them is a courtesy,
+        # so the money steps (reserve, post, receipt) must not wait on it. Any other failure is retried as before.
+        activity.logger.warning("billing %s %s not sent: WhatsApp delivery isn't configured", kind, document_id)
+        return
     response.raise_for_status()
     body = response.json()
     if (
@@ -244,6 +256,12 @@ async def record_dunning_state(record: DunningRecord) -> None:
 async def send_dunning_nudge(value: BillingCycleInput, attempt: int) -> None:
     if attempt < 1 or attempt > len(value.dunning_delays_seconds):
         raise ApplicationError("invalid dunning attempt", non_retryable=True)
+    if not os.environ.get("MESSAGING_URL", "").strip():
+        # No messaging service on this deployment: the reminder is a courtesy, so the cycle still waits for funds
+        # (awaiting_funds → paused) and the console shows it. Delivery errors from a configured service still retry.
+        activity.logger.warning("dunning reminder %s for %s/%s not sent: no messaging service configured",
+                                attempt, value.subscription_id, value.cycle)
+        return
     for channel in config().messaging_channels:
         response = await service_request(
             "MESSAGING_URL",
