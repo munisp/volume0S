@@ -203,6 +203,8 @@ async fn paystack_checkout_is_initialized_server_side_with_exact_minor_units() {
     assert!(request.starts_with("POST /transaction/initialize "));
     assert!(request.contains("\"amount\":\"125000\""));
     assert!(request.contains("\"tenant_id\":\"tenant-a\""));
+    // Lets the shared Paystack account's one webhook URL route this checkout's notification to VolumeOS.
+    assert!(request.contains("\"platform\":\"volumeos\""));
     server.join().unwrap();
 }
 
