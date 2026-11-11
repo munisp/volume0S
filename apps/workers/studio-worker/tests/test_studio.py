@@ -29,7 +29,7 @@ from studio_main import (
 def value(**changes):
     base = dict(
         tenant_id="tenant-1", pack_id="pack-1", product_id="product-1", tier="growth",
-        source_image="tenant-1/product.png", checkpoint="product-photography.safetensors",
+        source_image="tenant-1/uploads/product.png", checkpoint="product-photography.safetensors",
         materials="cotton", dimensions="30 x 20 cm", price_text="NGN 15000",
     )
     base.update(changes)
@@ -39,7 +39,7 @@ def value(**changes):
 def test_versioned_graph_is_valid_and_carries_pack_entitlements():
     graph = render_workflow(value())
     assert graph["4"]["inputs"]["ckpt_name"] == "product-photography.safetensors"
-    assert graph["10"]["inputs"]["image"] == "tenant-1/product.png"
+    assert graph["10"]["inputs"]["image"] == "tenant-1/uploads/product.png"
     assert graph["12"]["inputs"]["amount"] == 7
     assert graph["12"]["inputs"]["samples"] == ["11", 0]
     assert graph["9"]["inputs"]["filename_prefix"] == "volumeos/tenant-1/pack-1"

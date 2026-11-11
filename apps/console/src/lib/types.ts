@@ -82,7 +82,7 @@ export type StudioSnapshot = {
   updated_at: string
 }
 
-export type StudioAsset = { id: string; url: string; expires_in: number }
+export type StudioAsset = { id: string; url: string }
 export type StudioAssetResponse = { pack_id: string; manifest_sha256: string; assets: StudioAsset[] }
 
 export type Campaign = {

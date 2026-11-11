@@ -136,8 +136,28 @@ export class VolumeOSApi {
     return this.request<{ packs: StudioSnapshot[] }>(this.orchestratorUrl, '/v1/studio/packs')
   }
 
+  /** Stores a product photo under this business; returns the key a Studio pack starts from. */
+  uploadStudioPhoto(file: Blob) {
+    return this.request<{ source_image: string }>(this.orchestratorUrl, '/v1/studio/uploads', { method: 'POST', raw: file })
+  }
+
   startStudioPack(input: Record<string, string>) {
     return this.request<{ status: string; pack_id: string }>(this.orchestratorUrl, '/v1/studio/packs', { method: 'POST', body: input })
+  }
+
+  /** Fetches a protected file (an image or download) with the user's token; returns a local blob: URL for it. */
+  async blobUrl(path: string): Promise<string> {
+    const accessToken = await this.token()
+    if (!accessToken) throw new ApiError('Sign in to continue.', 401)
+    const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` }
+    if (this.actingTenant) headers['X-VolumeOS-Tenant'] = this.actingTenant
+    const response = await fetch(this.orchestratorUrl + path, { headers, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(30000) })
+    if (!response.ok) throw new ApiError(`The file couldn't be loaded (${response.status}).`, response.status)
+    return URL.createObjectURL(await response.blob())
+  }
+
+  studioDelivered(packId: string) {
+    return this.request<{ pack_id: string; files: { path: string; url: string }[] }>(this.orchestratorUrl, `/v1/studio/packs/${encodeURIComponent(packId)}/delivered`)
   }
 
   studioAssets(packId: string) {
@@ -321,6 +341,8 @@ export class VolumeOSApi {
   private async request<T>(base: string, path: string, options: {
     method?: string
     body?: unknown
+    /** A file sent as-is (e.g. a product photo) instead of a JSON body. */
+    raw?: Blob
     /** Business to act on (platform operators); '' sends none, undefined uses actingTenant. */
     tenant?: string
   } = {}, authenticated = true): Promise<T> {
@@ -334,10 +356,11 @@ export class VolumeOSApi {
       if (scope) headers['X-VolumeOS-Tenant'] = scope
     }
     if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+    if (options.raw) headers['Content-Type'] = options.raw.type || 'application/octet-stream'
     const response = await fetch(base + path, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.raw ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
       cache: 'no-store',
       credentials: 'omit',
       signal: AbortSignal.timeout(15000),

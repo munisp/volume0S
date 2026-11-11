@@ -1,0 +1,28 @@
+{
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 424242, "steps": 6, "cfg": 1.5, "sampler_name": "lcm", "scheduler": "sgm_uniform", "denoise": 0.55,
+      "model": ["5", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["12", 0]
+    }
+  },
+  "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{checkpoint}}"}},
+  "5": {"class_type": "LoraLoader", "inputs": {"lora_name": "lcm-lora-sdv1-5.safetensors", "strength_model": 1.0, "strength_clip": 1.0, "model": ["4", 0], "clip": ["4", 1]}},
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "professional ecommerce product photography, preserve product identity and label, clean studio lighting, sharp focus, accurate materials: {{materials}}, {{style}}",
+      "clip": ["5", 1]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {"text": "distorted product, changed label, misspelled text, watermark, extra objects, blurry, low resolution", "clip": ["5", 1]}
+  },
+  "8": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["3", 0], "vae": ["4", 2], "tile_size": 256, "overlap": 32, "temporal_size": 64, "temporal_overlap": 8}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "volumeos/{{tenant_id}}/{{pack_id}}", "images": ["8", 0]}},
+  "10": {"class_type": "LoadImage", "inputs": {"image": "{{source_image}}"}},
+  "13": {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": ["10", 0], "upscale_method": "lanczos", "megapixels": 0.3, "resolution_steps": 8}},
+  "11": {"class_type": "VAEEncode", "inputs": {"pixels": ["13", 0], "vae": ["4", 2]}},
+  "12": {"class_type": "RepeatLatentBatch", "inputs": {"samples": ["11", 0], "amount": {{image_count}}}}
+}

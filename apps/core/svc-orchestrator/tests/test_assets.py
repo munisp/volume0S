@@ -41,14 +41,16 @@ def configured_store(raw=None):
     return store, hashlib.sha256(raw).hexdigest()
 
 
-async def test_qa_assets_require_exact_manifest_and_return_short_lived_urls():
+async def test_qa_assets_are_served_through_this_api_never_as_storage_links():
+    # The storage server is internal (http://minio...:9000): a signed link to it can't load in the browser.
     store, digest = configured_store()
     qa = S3QAAssets("assets", store, expires_seconds=300)
     assets = await qa.review_assets("tenant-a", "pack-1", digest, 1)
-    assert assets[0]["id"] == "asset-01.png"
-    assert assets[0]["expires_in"] == 300
-    assert store.signed[0][1]["ResponseCacheControl"] == "no-store"
-    assert store.signed[0][2] == 300
+    assert assets == [{"id": "asset-01.png", "url": "/v1/studio/packs/pack-1/assets/asset-01.png"}]
+    assert await qa.read_qa_image("tenant-a", "pack-1", digest, 1, "asset-01.png") == b"png-data"
+    with pytest.raises(QAAssetError):
+        await qa.read_qa_image("tenant-a", "pack-1", digest, 1, "asset-02.png")
+    assert store.signed == []
 
 
 @pytest.mark.parametrize("change", [
@@ -70,13 +72,29 @@ async def test_qa_manifest_tampering_and_scope_changes_fail_closed(change):
     assert store.signed == []
 
 
-async def test_qa_asset_type_and_size_are_checked_before_signing():
+async def test_qa_asset_type_and_size_are_checked_before_serving():
     store, digest = configured_store()
     store.metadata["tenant-a/packs/pack-1/qa/asset-01.png"] = {"ContentType": "text/html", "ContentLength": 8}
     qa = S3QAAssets("assets", store)
     with pytest.raises(QAAssetError):
-        await qa.review_assets("tenant-a", "pack-1", digest, 1)
-    assert store.signed == []
+        await qa.read_qa_image("tenant-a", "pack-1", digest, 1, "asset-01.png")
+
+
+async def test_delivered_files_come_only_from_the_pack_delivery_manifest():
+    store = MemoryS3()
+    root = "tenant-a/packs/pack-1/delivered/"
+    store.objects[root + "manifest.json"] = json.dumps({"tenant_id": "tenant-a", "pack_id": "pack-1",
+                                                         "assets": [root + "whatsapp/asset-01.jpg"]}).encode()
+    store.objects[root + "whatsapp/asset-01.jpg"] = b"jpeg"
+    qa = S3QAAssets("assets", store)
+    assert await qa.delivered("tenant-a", "pack-1") == ["whatsapp/asset-01.jpg"]
+    assert await qa.read_delivered("tenant-a", "pack-1", "whatsapp/asset-01.jpg") == b"jpeg"
+    with pytest.raises(QAAssetError):
+        await qa.read_delivered("tenant-a", "pack-1", "jumia/asset-01.jpg")
+    store.objects[root + "manifest.json"] = json.dumps({"tenant_id": "tenant-a", "pack_id": "pack-1",
+                                                         "assets": ["tenant-b/packs/x/delivered/a.jpg"]}).encode()
+    with pytest.raises(QAAssetError):
+        await qa.delivered("tenant-a", "pack-1")
 
 
 def test_qa_url_expiry_is_bounded():

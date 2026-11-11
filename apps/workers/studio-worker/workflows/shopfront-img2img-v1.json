@@ -21,7 +21,7 @@
   "6": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "professional Nigerian ecommerce product photography, preserve product identity and label, clean studio lighting, accurate materials: {{materials}}, dimensions: {{dimensions}}, optional price text: {{price_text}}",
+      "text": "professional Nigerian ecommerce product photography, preserve product identity and label, clean studio lighting, accurate materials: {{materials}}, dimensions: {{dimensions}}, optional price text: {{price_text}}, {{style}}",
       "clip": ["4", 1]
     }
   },

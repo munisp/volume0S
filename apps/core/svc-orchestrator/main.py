@@ -88,10 +88,13 @@ class StudioStart(InputModel):
     product_id: str = Field(pattern=ID_PATTERN)
     tier: Literal["starter", "growth", "pro"]
     source_image: str = Field(min_length=1, max_length=1_024)
-    checkpoint: str = Field(min_length=1, max_length=255)
+    # Which image model: the deployment's reviewed default unless an operator names another.
+    checkpoint: str = Field(default_factory=lambda: os.environ.get("STUDIO_CHECKPOINT", "v1-5-pruned-emaonly.safetensors"),
+                            min_length=1, max_length=255, pattern=r"^[A-Za-z0-9._-]+\.safetensors$")
     materials: str = Field(default="", max_length=500)
     dimensions: str = Field(default="", max_length=200)
     price_text: str = Field(default="", max_length=100)
+    style: str = Field(default="", max_length=300)
 
 
 class StudioReview(InputModel):
@@ -453,12 +456,22 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
                 raise error("Workflow tenant scope mismatch.", 403, "forbidden")
         return {"packs": sorted_snapshots(snapshots)}
 
+    @app.post("/v1/studio/uploads", status_code=201)
+    async def upload_studio_photo(request: Request, claims: Claims = Depends(need("delivery"))):
+        """The product photo a Studio pack starts from (raw PNG/JPEG/WebP body), stored under this business."""
+        data = await request.body()
+        try:
+            key = await app.state.qa_assets.put_upload(claims.tenant_id, data)
+        except QAAssetError as exc:
+            raise error(str(exc), 400, "invalid_upload") from exc
+        return {"source_image": key}
+
     @app.post("/v1/studio/packs", status_code=202)
     async def start_studio_pack(body: StudioStart, claims: Claims = Depends(need("delivery"))):
         source = PurePosixPath(body.source_image)
-        if (not body.source_image.startswith(f"{claims.tenant_id}/") or source.is_absolute()
+        if (not body.source_image.startswith(f"{claims.tenant_id}/uploads/") or source.is_absolute()
                 or ".." in source.parts):
-            raise error("Source image must be inside the authenticated tenant prefix.", 400, "invalid_source")
+            raise error("Upload the product photo first; use the key the upload returned.", 400, "invalid_source")
         argument = body.model_dump() | {"tenant_id": claims.tenant_id}
         try:
             await app.state.workflows.start(
@@ -486,6 +499,47 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         except QAAssetError as exc:
             raise error("QA assets failed validation and cannot be reviewed.", 409, "invalid_qa_assets") from exc
         return {"pack_id": pack_id, "manifest_sha256": manifest_sha256, "assets": assets}
+
+    @app.get("/v1/studio/packs/{pack_id}/assets/{name}")
+    async def studio_asset_image(pack_id: ResourceId, name: Annotated[str, Path(pattern=r"^asset-\d{2}\.png$")],
+                                 claims: Claims = Depends(need("reader"))):
+        snapshot = await app.state.workflows.query(f"studio:{claims.tenant_id}:{pack_id}")
+        verify_snapshot(snapshot, claims, "pack_id", pack_id)
+        if snapshot.get("status") != "awaiting_qa":
+            raise error("Studio pack is not awaiting human QA.", 409, "invalid_state")
+        try:
+            data = await app.state.qa_assets.read_qa_image(claims.tenant_id, pack_id, snapshot.get("manifest_sha256", ""),
+                                                           snapshot.get("assets", 0), name)
+        except QAAssetError as exc:
+            raise error(str(exc), 404, "not_found") from exc
+        return Response(content=data, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/studio/packs/{pack_id}/delivered")
+    async def studio_delivered(pack_id: ResourceId, claims: Claims = Depends(need("reader"))):
+        """The approved pack's files: WhatsApp (1080 px) and Jumia (1000 px, white background) JPEGs."""
+        snapshot = await app.state.workflows.query(f"studio:{claims.tenant_id}:{pack_id}")
+        verify_snapshot(snapshot, claims, "pack_id", pack_id)
+        if snapshot.get("status") != "delivered":
+            raise error("This pack hasn't been delivered yet.", 409, "invalid_state")
+        try:
+            files = await app.state.qa_assets.delivered(claims.tenant_id, pack_id)
+        except QAAssetError as exc:
+            raise error(str(exc), 409, "invalid_delivery") from exc
+        return {"pack_id": pack_id, "files": [{"path": f, "url": f"/v1/studio/packs/{pack_id}/delivered/{f}"} for f in files]}
+
+    @app.get("/v1/studio/packs/{pack_id}/delivered/{channel}/{name}")
+    async def studio_delivered_file(pack_id: ResourceId, channel: Literal["whatsapp", "jumia"],
+                                    name: Annotated[str, Path(pattern=r"^asset-\d{2}\.jpg$")], claims: Claims = Depends(need("reader"))):
+        snapshot = await app.state.workflows.query(f"studio:{claims.tenant_id}:{pack_id}")
+        verify_snapshot(snapshot, claims, "pack_id", pack_id)
+        if snapshot.get("status") != "delivered":
+            raise error("This pack hasn't been delivered yet.", 409, "invalid_state")
+        try:
+            data = await app.state.qa_assets.read_delivered(claims.tenant_id, pack_id, f"{channel}/{name}")
+        except QAAssetError as exc:
+            raise error(str(exc), 404, "not_found") from exc
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{pack_id}-{channel}-{name}"'})
 
     @app.post("/v1/studio/packs/{pack_id}/review", status_code=202)
     async def review_studio_pack(pack_id: ResourceId, body: StudioReview, claims: Claims = Depends(need("delivery"))):

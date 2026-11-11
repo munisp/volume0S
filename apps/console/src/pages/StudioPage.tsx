@@ -49,12 +49,20 @@ export function StudioPage() {
       setLoaded({}); setImageError(false)
       if (!pack || pack.status !== 'awaiting_qa' || !pack.manifest_sha256 || pack.assets <= 0) { setAssets({ packId: '', manifest: '', items: [], error: null, loading: false }); return }
       setAssets(current => ({ ...current, loading: true, error: null }))
-      api.studioAssets(pack.pack_id).then(
-        response => active && setAssets({ packId: response.pack_id, manifest: response.manifest_sha256, items: response.assets, error: null, loading: false }),
-        error => active && setAssets({ packId: '', manifest: '', items: [], error: errorText(error), loading: false }),
-      )
+      // The images come from this API (the storage server isn't public): fetch each with the user's token.
+      api.studioAssets(pack.pack_id)
+        .then(async response => ({ response, items: await Promise.all(response.assets.map(async asset => ({ ...asset, url: await api.blobUrl(asset.url) }))) }))
+        .then(
+          ({ response, items }) => {
+            if (!active) { items.forEach(item => URL.revokeObjectURL(item.url)); return }
+            blobs.push(...items.map(item => item.url))
+            setAssets({ packId: response.pack_id, manifest: response.manifest_sha256, items, error: null, loading: false })
+          },
+          error => active && setAssets({ packId: '', manifest: '', items: [], error: errorText(error), loading: false }),
+        )
     }, 0)
-    return () => { active = false; window.clearTimeout(run) }
+    const blobs: string[] = []
+    return () => { active = false; window.clearTimeout(run); blobs.forEach(url => URL.revokeObjectURL(url)) }
   }, [api, pack])
 
   const manifestReady = Boolean(pack && assets.packId === pack.pack_id && assets.manifest === pack.manifest_sha256 && assets.items.length === pack.assets && assets.items.length > 0 && !assets.error)
@@ -69,8 +77,12 @@ export function StudioPage() {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     const packId = String(data.get('pack_id')).trim()
+    const photo = data.get('photo')
     void run(async () => {
-      await api.startStudioPack(Object.fromEntries(['pack_id', 'product_id', 'tier', 'source_image', 'checkpoint', 'materials', 'dimensions', 'price_text'].map(key => [key, String(data.get(key) ?? '').trim()])))
+      if (!(photo instanceof File) || !photo.size) throw new Error('Choose the product photo to start from.')
+      if (photo.size > 10_000_000) throw new Error('The photo is larger than 10 MB.')
+      const { source_image } = await api.uploadStudioPhoto(photo)
+      await api.startStudioPack({ ...Object.fromEntries(['pack_id', 'product_id', 'tier', 'materials', 'dimensions', 'price_text', 'style'].map(key => [key, String(data.get(key) ?? '').trim()])), source_image })
       setModal(false); await refresh(); void refreshAll(); navigate(`/services/studio/${encodeURIComponent(packId)}`)
       notify('success', 'Studio pack started. Images will wait for QA before anything is delivered.')
     })
@@ -116,6 +128,7 @@ export function StudioPage() {
         {assets.error && <Note tone="failed">The QA images couldn't be loaded: {assets.error} Approval stays locked.</Note>}
         {assets.items.length > 0 && <div className="qa-gallery" aria-label="QA images">{assets.items.map((asset, index) => <a className="qa-asset" key={asset.id} href={asset.url} target="_blank" rel="noreferrer" aria-label={`Open image ${index + 1}`}>
           <img src={asset.url} alt={`${pack.product_id}, generated image ${index + 1}`} onLoad={() => setLoaded(current => ({ ...current, [asset.id]: true }))} onError={() => setImageError(true)} /><span>{String(index + 1).padStart(2, '0')}</span></a>)}</div>}
+        {pack.status === 'delivered' && <DeliveredFiles packId={pack.pack_id} />}
         {imageError && <Note tone="failed">At least one image didn't load in this browser, so the pack can't be approved from here. Rejecting is still possible.</Note>}
         {!assets.items.length && !assets.loading && !assets.error && <div className="asset-schema"><ImageIcon size={22} /><div><strong>{pack.status === 'generating' ? 'Images are being generated' : 'No images to review'}</strong><p>Images appear here when the pack reaches QA.</p></div></div>}
         {pack.status === 'awaiting_qa' && (allowed(roles, 'reviewStudioPack') ? <div className="approval-form">
@@ -134,9 +147,11 @@ export function StudioPage() {
         <div className="form-grid"><Field label="Pack id" name="pack_id" placeholder="pack-adire-tote" pattern={ID_PATTERN} required /><Field label="Product id" name="product_id" placeholder="adire-tote-01" pattern={ID_PATTERN} required /></div>
         <div className="form-grid">
           <label className="field"><span>Tier</span><select name="tier" defaultValue="growth"><option value="starter">Starter · 5 images</option><option value="growth">Growth · 7 images</option><option value="pro">Pro · 12 images</option></select></label>
-          <Field label="Reviewed model checkpoint" name="checkpoint" placeholder="reviewed-model.safetensors" required />
         </div>
-        <Field label="Source image key" name="source_image" placeholder="uploads/adire-tote.png" required />
+        <label className="field"><span>Product photo</span><input type="file" name="photo" accept="image/png,image/jpeg,image/webp" required />
+          <small>A clear photo of the product (PNG, JPEG or WebP, up to 10 MB). The pack keeps the product and changes the scene.</small></label>
+        <label className="field"><span>Style notes (optional)</span><textarea name="style" rows={2} maxLength={300} placeholder="e.g. on a wooden table, warm morning light, plants in the background" />
+          <small>How the photos should look. The product itself isn't changed.</small></label>
         <div className="form-grid"><Field label="Materials" name="materials" placeholder="Adire cotton, leather handle" /><Field label="Dimensions" name="dimensions" placeholder="42 × 35 × 12 cm" /></div>
         <Field label="Price text" name="price_text" placeholder="₦28,500" />
         <Submit busy={busy} label="Start generation" />
@@ -145,5 +160,34 @@ export function StudioPage() {
     {confirm && pack && <Confirm title={`Approve images for ${pack.product_id}?`} confirmLabel="Approve images" busy={busy} onCancel={() => setConfirm(false)} onConfirm={() => review('approve')}>
       <p>You checked all {pack.assets} images of manifest <span className="mono">{pack.manifest_sha256.slice(0, 16)}…</span>. They'll be converted and delivered next; the same manifest is checked again before delivery.</p>
     </Confirm>}
+  </div>
+}
+
+/** The approved pack's files: WhatsApp (1080 px) and Jumia (1000 px, white background) JPEGs, downloaded with the user's token. */
+function DeliveredFiles({ packId }: { packId: string }) {
+  const { api, notify } = useSession()
+  const [files, setFiles] = useState<{ path: string; url: string }[] | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    api.studioDelivered(packId).then(result => { if (active) setFiles(result.files) }, error => { if (active) setFailure(errorText(error)) })
+    return () => { active = false }
+  }, [api, packId])
+  async function download(file: { path: string; url: string }) {
+    try {
+      const url = await api.blobUrl(file.url)
+      const link = document.createElement('a')
+      link.href = url; link.download = `${packId}-${file.path.replace('/', '-')}`; link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 10000)
+    } catch (error) { notify('error', errorText(error)) }
+  }
+  if (failure) return <Note tone="failed">The delivered files couldn't be listed: {failure}</Note>
+  if (!files) return <Note>Loading the delivered files…</Note>
+  return <div className="stack" aria-label="Delivered files">
+    <strong>Delivered: {files.length} files</strong>
+    {(['whatsapp', 'jumia'] as const).map(channel => <div key={channel} className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span className="small muted" style={{ minWidth: 150 }}>{channel === 'whatsapp' ? 'WhatsApp (1080 px)' : 'Jumia (1000 px, white)'}</span>
+      {files.filter(file => file.path.startsWith(channel + '/')).map((file, index) => <button key={file.path} className="button button-secondary small" onClick={() => void download(file)}>Image {index + 1}</button>)}
+    </div>)}
   </div>
 }

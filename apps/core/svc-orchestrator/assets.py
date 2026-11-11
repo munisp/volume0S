@@ -15,6 +15,22 @@ class QAAssetError(Exception):
     """QA objects are missing, changed, or outside their tenant pack."""
 
 
+IMAGE_SIGNATURES = (  # what a product photo upload may be, by its first bytes (not the claimed content type)
+    (b"\x89PNG\r\n\x1a\n", "png", "image/png"),
+    (b"\xff\xd8\xff", "jpg", "image/jpeg"),
+)
+MAX_UPLOAD_BYTES = 10_000_000
+
+
+def sniff_image(data: bytes) -> tuple[str, str] | None:
+    for signature, extension, content_type in IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return extension, content_type
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    return None
+
+
 class S3QAAssets:
     def __init__(self, bucket: str, client: Any = None, expires_seconds: int = 300):
         if not bucket.strip():
@@ -25,6 +41,17 @@ class S3QAAssets:
         self.expires_seconds = expires_seconds
         self.client = client or boto3.client("s3")
 
+    async def put_upload(self, tenant_id: str, data: bytes) -> str:
+        """Stores a product photo under the business's own uploads/ prefix; returns its key."""
+        kind = sniff_image(data)
+        if kind is None or not 0 < len(data) <= MAX_UPLOAD_BYTES:
+            raise QAAssetError("Upload a PNG, JPEG or WebP photo of at most 10 MB.")
+        extension, content_type = kind
+        key = f"{tenant_id}/uploads/{hashlib.sha256(data).hexdigest()[:24]}.{extension}"
+        await asyncio.to_thread(self.client.put_object, Bucket=self.bucket, Key=key, Body=data, ContentType=content_type,
+                                Metadata={"tenant-id": tenant_id})
+        return key
+
     async def validate_manifest(self, tenant_id: str, pack_id: str,
                                 expected_sha256: str, expected_count: int) -> list[str]:
         return await asyncio.to_thread(
@@ -33,8 +60,48 @@ class S3QAAssets:
 
     async def review_assets(self, tenant_id: str, pack_id: str,
                             expected_sha256: str, expected_count: int) -> list[dict[str, Any]]:
+        """The QA images, as this API's own URLs: the storage server is internal, so the browser can't use signed
+        storage links. Each URL is fetched with the user's token (read_qa_image re-checks everything)."""
         keys = await self.validate_manifest(tenant_id, pack_id, expected_sha256, expected_count)
-        return await asyncio.to_thread(self._presign, keys)
+        return [{"id": PurePosixPath(key).name, "url": f"/v1/studio/packs/{pack_id}/assets/{PurePosixPath(key).name}"} for key in keys]
+
+    async def read_qa_image(self, tenant_id: str, pack_id: str, expected_sha256: str, expected_count: int, name: str) -> bytes:
+        keys = await self.validate_manifest(tenant_id, pack_id, expected_sha256, expected_count)
+        key = next((k for k in keys if PurePosixPath(k).name == name), None)
+        if key is None:
+            raise QAAssetError("That image isn't part of this pack's QA set")
+        head = await asyncio.to_thread(self.client.head_object, Bucket=self.bucket, Key=key)
+        if head.get("ContentType") != "image/png" or not 0 < head.get("ContentLength", 0) <= 25_000_000:
+            raise QAAssetError("QA asset has an invalid type or size")
+        return await asyncio.to_thread(self._read, key, 25_000_000)
+
+    async def delivered(self, tenant_id: str, pack_id: str) -> list[str]:
+        """The delivered files of an approved pack (paths under its delivered/ folder)."""
+        root = f"{tenant_id}/packs/{pack_id}/delivered/"
+        raw = await asyncio.to_thread(self._read, root + "manifest.json", 1_048_576)
+        try:
+            manifest = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise QAAssetError("Delivery manifest is invalid") from exc
+        assets = manifest.get("assets") if isinstance(manifest, dict) else None
+        if (not isinstance(assets, list) or manifest.get("tenant_id") != tenant_id or manifest.get("pack_id") != pack_id
+                or not all(isinstance(a, str) and a.startswith(root) and ".." not in PurePosixPath(a).parts for a in assets)):
+            raise QAAssetError("Delivery manifest doesn't match this pack")
+        return [a[len(root):] for a in assets]
+
+    async def read_delivered(self, tenant_id: str, pack_id: str, path: str) -> bytes:
+        if path not in await self.delivered(tenant_id, pack_id):
+            raise QAAssetError("That file isn't part of this delivered pack")
+        return await asyncio.to_thread(self._read, f"{tenant_id}/packs/{pack_id}/delivered/{path}", 25_000_000)
+
+    def _read(self, key: str, limit: int) -> bytes:
+        try:
+            raw = self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read(limit + 1)
+        except Exception as exc:
+            raise QAAssetError("That file is unavailable") from exc
+        if len(raw) > limit:
+            raise QAAssetError("That file is too large")
+        return raw
 
     def _validate_manifest(self, tenant_id: str, pack_id: str,
                            expected_sha256: str, expected_count: int) -> list[str]:
