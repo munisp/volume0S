@@ -99,6 +99,11 @@ export function WalletPage() {
     try {
       const result = await api.startTopup(pending.provider, pending.reference, { amount_minor: kobo(pending.amount), currency: 'NGN', customer_email: pending.email, redirect_url: `${window.location.origin}/billing/callback` })
       setCheckout(result); setPending(null)
+      if (result.checkout_url) {
+        // Straight to the provider's page; it returns to /billing/callback, and the balance moves once they confirm.
+        window.location.assign(result.checkout_url)
+        return
+      }
       notify('info', 'Checkout created. Complete the payment with the provider; the money appears only after they confirm it.')
     } catch (error) { notify('error', errorText(error)) } finally { setBusy(false) }
   }

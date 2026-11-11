@@ -54,11 +54,11 @@ const BILLING_ACTIONS: { action: Action; label: string }[] = [
 ]
 
 export function FinancePage() {
-  const { api, user, tenant, roles } = useSession()
+  const { api, user, tenant, roles, offerName } = useSession()
   const blocked = BILLING_ACTIONS.filter(item => !allowed(roles, item.action))
   return <>
     {blocked.length > 0 && <div style={{ marginBottom: 12 }}><Note>With your role you can view finance but not {blocked.map(item => item.label).join(', ')}. ({blocked.map(item => needs(item.action)).join('; ')}.)</Note></div>}
     <BillingSection key={tenant?.id ?? 'none'} api={api} connected={Boolean(user && tenant && api.orchestratorConfigured)} platform={tenant?.id === 'platform'}
-      allow={action => allowed(roles, action)} />
+      allow={action => allowed(roles, action)} subscriptions={tenant?.subscriptions ?? []} offerName={offerName} />
   </>
 }

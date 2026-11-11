@@ -7,7 +7,7 @@ import {
 import type { VolumeOSApi } from '../lib/api'
 import type {
   ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Checkout, CollectionReceipt,
-  ExportMetadata, PartnerStatement, TrialBalance,
+  ExportMetadata, PartnerStatement, Subscription, TrialBalance,
 } from '../lib/types'
 
 type Notice = { kind: 'success' | 'error'; message: string } | null
@@ -46,7 +46,11 @@ function saveBlob(blob: Blob, filename: string) {
 type BillingAction = 'topUp' | 'recoverBilling' | 'startBillingCycle' | 'financeReports'
 
 /** `allow` reflects the signed-in role (the server checks again); disabled actions are explained by the page. */
-export function BillingSection({ api, connected, platform, allow = () => true }: { api: VolumeOSApi; connected: boolean; platform: boolean; allow?: (action: BillingAction) => boolean }) {
+export function BillingSection({ api, connected, platform, allow = () => true, subscriptions = [], offerName = id => `Offer ${id}` }: {
+  api: VolumeOSApi; connected: boolean; platform: boolean; allow?: (action: BillingAction) => boolean
+  /** The business's subscriptions, so a billing cycle is started for one of them instead of a typed id. */
+  subscriptions?: Subscription[]; offerName?: (id: string) => string
+}) {
   const [balance, setBalance] = useState<Balance | null>(null)
   const [cycles, setCycles] = useState<BillingCycleSnapshot[]>([])
   const [documents, setDocuments] = useState<BillingDocument[]>([])
@@ -127,12 +131,15 @@ export function BillingSection({ api, connected, platform, allow = () => true }:
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     await action('cycle', async () => {
+      // A TIN is often written 12345678-0001: keep the digits, which is what the server stores and checks (8-14).
       const party = (prefix: string) => ({
-        legal_name: String(data.get(`${prefix}_legal_name`)), tin: String(data.get(`${prefix}_tin`)),
+        legal_name: String(data.get(`${prefix}_legal_name`)), tin: String(data.get(`${prefix}_tin`)).replace(/\D/g, ''),
         address: String(data.get(`${prefix}_address`)),
       })
+      const subscription = subscriptions.find(item => item.id === String(data.get('subscription_id')))
+      if (!subscription) throw new Error('Choose one of this business\'s subscriptions.')
       await api.startBillingCycle({
-        subscription_id: String(data.get('subscription_id')), offer: String(data.get('offer')),
+        subscription_id: subscription.id, offer: subscription.offer,
         cycle: String(data.get('cycle')), issue_date: String(data.get('issue_date')),
         retainer_minor: Number(minorFromMajor(data.get('retainer'))),
         setup_minor: Number(minorFromMajor(data.get('setup') || '0')),
@@ -265,7 +272,9 @@ export function BillingSection({ api, connected, platform, allow = () => true }:
       </div>
     </section>
 
-    <details className="billing-disclosure"><summary><Plus size={17} /> Start a monthly billing cycle</summary><div className="section-block compact"><p className="body-copy">Retainer reserve → post → receipt. Weekly metering handles usage overages separately; this form always submits usage as zero to prevent double charging.</p><form className="form-stack" onSubmit={startCycle}><div className="form-grid"><Field label="Subscription ID" name="subscription_id" required /><label className="field"><span>Offer</span><select name="offer">{['01','02','03','04','05','06','07','08'].map(id => <option key={id} value={id}>{id}</option>)}</select></label></div><div className="form-grid"><Field label="Cycle" name="cycle" type="month" defaultValue={isoMonth()} required /><Field label="Issue date" name="issue_date" type="date" defaultValue={isoToday()} required /></div><div className="form-grid"><Field label="Retainer (NGN)" name="retainer" inputMode="decimal" required /><Field label="Setup (NGN)" name="setup" inputMode="decimal" defaultValue="0" required /><Field label="Tax (NGN)" name="tax" inputMode="decimal" defaultValue="0" required /></div><PartyFields prefix="seller" title="Seller" /><PartyFields prefix="buyer" title="Buyer" /><Field label="Billing WhatsApp" name="billing_whatsapp" type="tel" placeholder="+2348012345678" required /><Submit busy={busy === 'cycle'} disabled={!canAct || !allow('startBillingCycle')} label="Start durable billing workflow" /></form></div></details>
+    <details className="billing-disclosure"><summary><Plus size={17} /> Start a monthly billing cycle</summary><div className="section-block compact"><p className="body-copy">Retainer reserve → post → receipt. Weekly metering handles usage overages separately; this form always submits usage as zero to prevent double charging.</p><form className="form-stack" onSubmit={startCycle}>{subscriptions.length === 0
+          ? <p className="body-copy">This business has no subscriptions yet: subscribe it to a service in the catalogue first.</p>
+          : <label className="field"><span>Subscription</span><select name="subscription_id" required>{subscriptions.map(item => <option key={item.id} value={item.id}>{`${item.offer} · ${offerName(item.offer)} · ${item.tier}${item.created_at ? ` · since ${new Date(item.created_at).toLocaleDateString('en-NG')}` : ''}`}</option>)}</select></label>}<div className="form-grid"><Field label="Cycle" name="cycle" type="month" defaultValue={isoMonth()} required /><Field label="Issue date" name="issue_date" type="date" defaultValue={isoToday()} required /></div><div className="form-grid"><Field label="Retainer (NGN)" name="retainer" inputMode="decimal" required /><Field label="Setup (NGN)" name="setup" inputMode="decimal" defaultValue="0" required /><Field label="Tax (NGN)" name="tax" inputMode="decimal" defaultValue="0" required /></div><PartyFields prefix="seller" title="Seller" /><PartyFields prefix="buyer" title="Buyer" /><Field label="Billing WhatsApp" name="billing_whatsapp" type="tel" placeholder="+2348012345678" required /><Submit busy={busy === 'cycle'} disabled={!canAct || !allow('startBillingCycle') || subscriptions.length === 0} label="Start monthly billing" /></form></div></details>
 
     <section className="section-block"><div className="section-heading"><div><p className="section-kicker">Financial documents</p><h2>Invoices & posted receipts</h2></div><span className="data-label">PDF hashes verified by the operator API</span></div><div className="billing-table-wrap"><table className="billing-table"><thead><tr><th>Document</th><th>Type</th><th>Amount</th><th>Issued</th><th><span className="sr-only">Download</span></th></tr></thead><tbody>{documents.map(document => {
       const amount = text(document.structured.total_minor ?? document.structured.amount_minor, '')
@@ -293,7 +302,7 @@ function SectionTitle({ icon, title, copy }: { icon: ReactNode; title: string; c
 }
 
 function PartyFields({ prefix, title }: { prefix: string; title: string }) {
-  return <fieldset className="party-fields"><legend>{title} legal details</legend><div className="form-grid"><Field label="Legal name" name={`${prefix}_legal_name`} required /><Field label="TIN" name={`${prefix}_tin`} inputMode="numeric" pattern="[0-9]{8,14}" required /></div><Field label="Address" name={`${prefix}_address`} required /></fieldset>
+  return <fieldset className="party-fields"><legend>{title} legal details</legend><div className="form-grid"><Field label="Legal name" name={`${prefix}_legal_name`} required /><Field label="TIN" name={`${prefix}_tin`} inputMode="numeric" pattern="[0-9\- ]{8,20}" title="8 to 14 digits; dashes and spaces are fine (e.g. 12345678-0001)" placeholder="12345678-0001" required /></div><Field label="Address" name={`${prefix}_address`} required /></fieldset>
 }
 
 function AgingTable({ report }: { report: ArAgingReport | null }) {
