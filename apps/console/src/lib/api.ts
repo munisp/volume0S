@@ -65,9 +65,15 @@ export class VolumeOSApi {
     return this.request<{ people: Person[] }>(this.orchestratorUrl, '/v1/people')
   }
 
-  /** Creates the sign-in with a one-time password, returned once, that the person replaces at first sign-in. */
-  addPerson(input: { email: string; first_name: string; last_name: string; role: string }, tenant?: string) {
-    return this.request<{ person: Person; temporary_password: string }>(this.orchestratorUrl, '/v1/people', { method: 'POST', body: input, tenant })
+  /** Creates the sign-in; its one-time password is emailed to the person (never shown here). */
+  addPerson(input: { email: string; first_name: string; last_name: string; role: string; business_name?: string }, tenant?: string) {
+    return this.request<{ person: Person; sign_in_email: 'sent' | 'not_sent_test_address' }>(this.orchestratorUrl, '/v1/people', { method: 'POST', body: input, tenant })
+  }
+
+  /** Emails a fresh one-time password to someone who hasn't signed in yet (their first email went missing). */
+  resendSignIn(id: string, businessName?: string) {
+    return this.request<{ person: Person; sign_in_email: string }>(this.orchestratorUrl, `/v1/people/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: { send_sign_in: true, business_name: businessName } })
   }
 
   updatePerson(id: string, change: { role?: string; enabled?: boolean }) {

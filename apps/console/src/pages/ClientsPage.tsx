@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { ArrowRight, Copy, Plus, RefreshCw } from 'lucide-react'
+import { ArrowRight, Plus, RefreshCw } from 'lucide-react'
 import { useSession, errorText } from '../state/session-context'
 import type { Offer, Tenant, TenantSummary } from '../lib/types'
 import { Empty, Field, Modal, Note, OfferMark, PageHead, Panel, SearchBox, Status, Submit } from '../components/ui'
@@ -67,7 +67,7 @@ export function ClientsPage() {
 }
 
 type Step = 'business' | 'owner' | 'services' | 'done'
-type Result = { tenantId: string; name: string; email: string; password: string; subscribed: string[]; warnings: string[] }
+type Result = { tenantId: string; name: string; email: string; emailed: boolean; subscribed: string[]; warnings: string[] }
 
 /** Business record → owner sign-in → services, in one go. Each call is made for the new business explicitly. */
 function OnboardClient({ existing, onClose, onDone }: { existing: Set<string>; onClose: () => void; onDone: () => void }) {
@@ -104,22 +104,17 @@ function OnboardClient({ existing, onClose, onDone }: { existing: Set<string>; o
     try {
       created = await api.transitionTenant('onboarding', created.version, 'Onboarded from the console', id)
     } catch (error) { warnings.push(`It stayed a prospect: ${errorText(error)}`) }
-    let password = ''
+    let emailed = false
     try {
-      password = (await api.addPerson({ ...owner, email: owner.email.trim(), role: 'client-owner' }, id)).temporary_password
+      emailed = (await api.addPerson({ ...owner, email: owner.email.trim(), role: 'client-owner', business_name: created.name }, id)).sign_in_email === 'sent'
     } catch (error) { warnings.push(`The owner's sign-in wasn't created (add it under Client › People): ${errorText(error)}`) }
     const subscribed: string[] = []
     for (const [offer, tier] of Object.entries(services)) {
       try { await api.createSubscription(offer, tier, id); subscribed.push(offer) } catch (error) { warnings.push(`Offer ${offer} wasn't subscribed: ${errorText(error)}`) }
     }
-    setResult({ tenantId: id, name: created.name, email: owner.email.trim().toLowerCase(), password, subscribed, warnings })
+    setResult({ tenantId: id, name: created.name, email: owner.email.trim().toLowerCase(), emailed, subscribed, warnings })
     setStep('done'); setBusy(false); onDone()
   }
-
-  const signInUrl = window.location.origin
-  const handover = result && result.password
-    ? `Your VolumeOS account is ready.\nSign in: ${signInUrl}\nEmail: ${result.email}\nOne-time password: ${result.password}\nYou'll choose your own password when you first sign in.`
-    : ''
 
   return <Modal title={step === 'done' ? `${result?.name ?? 'Client'} is set up` : 'Onboard a client'} wide
     description={step === 'done' ? undefined : `Step ${['business', 'owner', 'services'].indexOf(step) + 1} of 3`} onClose={onClose}>
@@ -147,7 +142,7 @@ function OnboardClient({ existing, onClose, onDone }: { existing: Set<string>; o
         <Field label="Last name" name="last_name" value={owner.last_name} required maxLength={80} onChange={event => setOwner({ ...owner, last_name: event.target.value })} />
       </div>
       <Field label="Email" name="email" type="email" value={owner.email} required onChange={event => setOwner({ ...owner, email: event.target.value })}
-        hint="This is their sign-in. They get a one-time password from you and choose their own at first sign-in." />
+        hint="This is their sign-in. We email them a one-time password; they choose their own at first sign-in." />
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <button type="button" className="button button-secondary" onClick={() => setStep('business')}>Back</button>
         <button className="button button-primary">Next: services <ArrowRight size={15} /></button>
@@ -185,13 +180,12 @@ function OnboardClient({ existing, onClose, onDone }: { existing: Set<string>; o
         <dt>Business id</dt><dd className="mono">{result.tenantId}</dd>
         <dt>Status</dt><dd>Onboarding</dd>
         <dt>Services</dt><dd>{result.subscribed.length ? result.subscribed.join(', ') : 'None yet'}</dd>
-        {result.password && <><dt>Owner sign-in</dt><dd className="mono">{result.email}</dd>
-          <dt>One-time password</dt><dd className="mono">{result.password}</dd></>}
+        <dt>Owner sign-in</dt><dd className="mono">{result.email}</dd>
       </dl>
-      {result.password && <Note tone="attention">This password is shown once and isn't stored. Send it to the owner now; they replace it when they first sign in.</Note>}
+      {result.emailed && <Note tone="done">We've emailed {result.email} their sign-in details. If it doesn't arrive, use <strong>Send sign-in again</strong> under Client › People.</Note>}
       {result.warnings.map(warning => <Note key={warning} tone="failed">{warning}</Note>)}
       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-        {handover ? <button className="button button-secondary" onClick={() => void navigator.clipboard.writeText(handover)}><Copy size={15} /> Copy sign-in details</button> : <span />}
+        <span />
         <button className="button button-primary" onClick={() => switchTenant(result.tenantId)}>Open {result.name} <ArrowRight size={15} /></button>
       </div>
     </div>}

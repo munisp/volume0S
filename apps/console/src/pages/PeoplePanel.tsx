@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Copy, Plus } from 'lucide-react'
+import { Mail, Plus } from 'lucide-react'
 import { useSession, errorText } from '../state/session-context'
 import { roleLabel } from '../lib/access'
 import type { Person } from '../lib/types'
@@ -24,7 +24,6 @@ export function PeoplePanel({ businessName }: { businessName: string }) {
   const [people, setPeople] = useState<Person[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
-  const [created, setCreated] = useState<{ email: string; password: string } | null>(null)
   const [disabling, setDisabling] = useState<Person | null>(null)
   const [busy, setBusy] = useState(false)
   const roles = platform ? [...ASSIGNABLE, 'super-operator'] : ASSIGNABLE
@@ -52,9 +51,20 @@ export function PeoplePanel({ businessName }: { businessName: string }) {
     void run(async () => {
       const result = await api.addPerson({
         email: String(data.get('email')).trim(), first_name: String(data.get('first_name')).trim(),
-        last_name: String(data.get('last_name')).trim(), role: String(data.get('role')),
+        last_name: String(data.get('last_name')).trim(), role: String(data.get('role')), business_name: businessName,
       })
-      setAdding(false); setCreated({ email: result.person.email, password: result.temporary_password })
+      setAdding(false)
+      notify('success', result.sign_in_email === 'sent'
+        ? `Sign-in created. We've emailed ${result.person.email} their sign-in details.`
+        : `Sign-in created for ${result.person.email} (a test address, so no email was sent).`)
+      load()
+    })
+  }
+
+  function resend(person: Person) {
+    void run(async () => {
+      await api.resendSignIn(person.id, businessName)
+      notify('success', `We've emailed ${person.email} a new one-time password.`)
       load()
     })
   }
@@ -87,19 +97,23 @@ export function PeoplePanel({ businessName }: { businessName: string }) {
             <td data-label="Sign-in">{!person.enabled ? <Status state="stopped" label="Turned off" />
               : person.must_set_password ? <Status state="needs-review" label="Hasn't signed in yet" /> : <Status state="done" label="Active" />}</td>
             <td className="right">{self ? <span className="small muted">You</span>
-              : person.enabled ? <button className="button button-danger-quiet small" disabled={busy} onClick={() => setDisabling(person)}>Turn off</button>
-              : <button className="button button-secondary small" disabled={busy} onClick={() => change(person, { enabled: true })}>Turn on</button>}</td>
+              : <div className="row" style={{ justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+                {person.enabled && person.must_set_password && <button className="button button-secondary small" disabled={busy} onClick={() => resend(person)}
+                  title="Emails them a new one-time password"><Mail size={14} /> Send sign-in again</button>}
+                {person.enabled ? <button className="button button-danger-quiet small" disabled={busy} onClick={() => setDisabling(person)}>Turn off</button>
+                  : <button className="button button-secondary small" disabled={busy} onClick={() => change(person, { enabled: true })}>Turn on</button>}
+              </div>}</td>
           </tr>
         })}
       </tbody></table></div>}
 
-    {adding && <Modal title={`Add a person to ${businessName}`} description="They get a one-time password from you and choose their own at first sign-in." onClose={() => setAdding(false)}>
+    {adding && <Modal title={`Add a person to ${businessName}`} description="We email them a one-time password; they choose their own at first sign-in." onClose={() => setAdding(false)}>
       <form className="form-stack" onSubmit={add}>
         <div className="form-grid">
           <Field label="First name" name="first_name" required maxLength={80} />
           <Field label="Last name" name="last_name" required maxLength={80} />
         </div>
-        <Field label="Email" name="email" type="email" required hint="This is their sign-in." />
+        <Field label="Email" name="email" type="email" required hint="This is their sign-in. Their sign-in details are emailed here." />
         <label className="field"><span>Role</span>
           <select name="role" defaultValue="client-owner" required>
             {roles.map(option => <option key={option} value={option}>{roleLabel(option)} — {ROLE_HINT[option]}</option>)}
@@ -107,15 +121,6 @@ export function PeoplePanel({ businessName }: { businessName: string }) {
         </label>
         <Submit busy={busy} label="Create sign-in" />
       </form>
-    </Modal>}
-
-    {created && <Modal title="Sign-in created" onClose={() => setCreated(null)}>
-      <div className="form-stack">
-        <dl className="props"><dt>Email</dt><dd className="mono">{created.email}</dd><dt>One-time password</dt><dd className="mono">{created.password}</dd></dl>
-        <Note tone="attention">Shown once and not stored. Send it to them now; they replace it when they first sign in.</Note>
-        <button className="button button-secondary" onClick={() => void navigator.clipboard.writeText(`Your VolumeOS account is ready.\nSign in: ${window.location.origin}\nEmail: ${created.email}\nOne-time password: ${created.password}\nYou'll choose your own password when you first sign in.`)}>
-          <Copy size={15} /> Copy sign-in details</button>
-      </div>
     </Modal>}
 
     {disabling && <Confirm title={`Turn off ${disabling.email}?`} confirmLabel="Turn off sign-in" danger busy={busy}

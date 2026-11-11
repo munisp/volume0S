@@ -54,6 +54,15 @@ spec:
               valueFrom: {secretKeyRef: {name: svc-provisioning, key: keycloak-admin-client-secret}}
             - name: DAPR_API_TOKEN
               valueFrom: {secretKeyRef: {name: svc-provisioning, key: dapr-api-token, optional: true}}
+            # Sign-in emails (new people get their one-time password by email, through Resend).
+            - name: RESEND_API_KEY
+              valueFrom: {secretKeyRef: {name: svc-provisioning, key: resend-api-key, optional: true}}
+            - name: MAIL_FROM
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: mail-from, optional: true}}
+            - name: CONSOLE_URL
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: console-url, optional: true}}
+            - name: EMAIL_TEST_DOMAINS
+              valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: email-test-domains, optional: true}}
           readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2}
           livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2}
           resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}

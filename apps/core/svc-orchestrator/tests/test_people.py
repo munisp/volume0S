@@ -20,7 +20,7 @@ class FakePeople:
 
     async def create(self, tenant_id, payload):
         self.calls.append(("create", tenant_id, payload))
-        return {"person": {"id": PERSON}, "temporary_password": "x"}
+        return {"person": {"id": PERSON}, "sign_in_email": "sent"}
 
     async def update(self, tenant_id, person_id, payload):
         self.calls.append(("update", tenant_id, person_id, payload))
@@ -90,3 +90,16 @@ def test_nobody_changes_their_own_access():
     with client:
         assert client.patch(f"/v1/people/{PERSON}", headers=auth(), json={"enabled": False}).status_code == 409
     assert people.calls == []
+
+
+def test_the_business_name_goes_to_the_sign_in_email_and_resending_is_its_own_request():
+    client, people, _ = client_for(TENANT_OPERATOR)
+    other = "1b9a3c1e-1111-4222-8333-444455556666"
+    with client:
+        assert client.post("/v1/people", headers=auth(), json={**NEW, "role": "sales", "business_name": "Demo Tenant Ltd"}).status_code == 201
+        assert client.patch(f"/v1/people/{other}", headers=auth(), json={"send_sign_in": True, "business_name": "Demo Tenant Ltd"}).status_code == 200
+        assert client.patch(f"/v1/people/{other}", headers=auth(), json={"send_sign_in": True, "enabled": False}).status_code == 400
+        assert client.patch(f"/v1/people/{other}", headers=auth(), json={"send_sign_in": False}).status_code == 400
+    assert people.calls[0] == ("create", "demo-tenant", {**NEW, "role": "sales", "business_name": "Demo Tenant Ltd"})
+    assert people.calls[1] == ("update", "demo-tenant", other, {"send_sign_in": True, "business_name": "Demo Tenant Ltd"})
+    assert len(people.calls) == 2

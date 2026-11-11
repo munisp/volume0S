@@ -20,6 +20,7 @@ type API struct {
 	serviceToken string
 	keycloak     *KeycloakClient
 	postiz       *PostizClient
+	mailer       Mailer // nil: sign-in emails aren't set up, so new sign-ins are refused
 }
 
 func (a *API) routes() http.Handler {

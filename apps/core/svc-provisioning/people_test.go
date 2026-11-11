@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +19,7 @@ type fakeKeycloak struct {
 	mappings map[string][]kcRole
 	roles    map[string]kcRole
 	next     int
+	resets   int
 }
 
 func newFakeKeycloak() *fakeKeycloak {
@@ -95,6 +98,14 @@ func (f *fakeKeycloak) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(path, "/roles/"):
 		_ = json.NewEncoder(w).Encode(f.roles[strings.TrimPrefix(path, "/roles/")])
+	case strings.HasSuffix(path, "/reset-password"):
+		u := f.users[strings.Split(path, "/")[2]]
+		if u == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		f.resets++
+		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(path, "/users/"):
 		u := f.users[strings.TrimPrefix(path, "/users/")]
 		if u == nil {
@@ -122,11 +133,36 @@ func (f *fakeKeycloak) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func peopleAPI(t *testing.T) (http.Handler, *fakeKeycloak) {
 	t.Helper()
+	h, fake, _ := peopleAPIWithMail(t, &fakeMailer{})
+	return h, fake
+}
+
+type fakeMailer struct {
+	sent []SignInEmail
+	fail bool
+}
+
+func (m *fakeMailer) SendSignIn(_ context.Context, e SignInEmail) error {
+	if m.fail {
+		return errors.New("resend down")
+	}
+	m.sent = append(m.sent, e)
+	return nil
+}
+
+func peopleAPIWithMail(t *testing.T, mailer Mailer) (http.Handler, *fakeKeycloak, Mailer) {
+	t.Helper()
 	fake := newFakeKeycloak()
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 	kc := &KeycloakClient{adminURL: server.URL + "/admin", tokenURL: server.URL + "/token", clientID: "c", clientSecret: "s", httpClient: server.Client()}
-	return (&API{serviceToken: strings.Repeat("x", 32), keycloak: kc}).routes(), fake
+	api := &API{serviceToken: strings.Repeat("x", 32), keycloak: kc}
+	if mailer != nil {
+		if fm, ok := mailer.(*fakeMailer); !ok || fm != nil {
+			api.mailer = mailer
+		}
+	}
+	return api.routes(), fake, mailer
 }
 
 func call(t *testing.T, h http.Handler, method, path, tenant, body string) *httptest.ResponseRecorder {
@@ -166,11 +202,11 @@ func TestCreatePersonGivesOneRoleAndAOneTimePassword(t *testing.T) {
 		t.Fatalf("create: %d %s", r.Code, r.Body.String())
 	}
 	var body struct {
-		Person            Person
-		TemporaryPassword string `json:"temporary_password"`
+		Person       Person
+		TestPassword string `json:"test_password"`
 	}
 	_ = json.Unmarshal(r.Body.Bytes(), &body)
-	if body.Person.Email != "ada@acme.test" || len(body.TemporaryPassword) != 16 || len(body.Person.Roles) != 1 || body.Person.Roles[0] != "client-owner" {
+	if body.Person.Email != "ada@acme.test" || len(body.TestPassword) != 16 || len(body.Person.Roles) != 1 || body.Person.Roles[0] != "client-owner" {
 		t.Fatalf("created: %s", r.Body.String())
 	}
 	u := fake.users[body.Person.ID]
@@ -207,4 +243,74 @@ func TestOneTimePasswordsDiffer(t *testing.T) {
 	if a == b || len(a) != 16 {
 		t.Fatalf("passwords %q %q", a, b)
 	}
+}
+
+func TestARealAddressGetsItsSignInByEmailNotInTheAnswer(t *testing.T) {
+	mail := &fakeMailer{}
+	h, fake, _ := peopleAPIWithMail(t, mail)
+	r := call(t, h, http.MethodPost, "/v1/people", "acme-ltd", `{"email":"ada@acme.ng","first_name":"Ada","last_name":"Obi","role":"client-owner","business_name":"Acme Ltd"}`)
+	if r.Code != 201 || hasPasswordField(r.Body.String()) || !strings.Contains(r.Body.String(), `"sign_in_email":"sent"`) {
+		t.Fatalf("create: %d %s", r.Code, r.Body.String())
+	}
+	if len(mail.sent) != 1 || mail.sent[0].To != "ada@acme.ng" || mail.sent[0].Business != "Acme Ltd" || len(mail.sent[0].Password) != 16 {
+		t.Fatalf("email: %+v", mail.sent)
+	}
+	if len(fake.users) != 1 {
+		t.Fatalf("users: %d", len(fake.users))
+	}
+}
+
+func TestAFailedEmailLeavesNoSignInBehind(t *testing.T) {
+	h, fake, _ := peopleAPIWithMail(t, &fakeMailer{fail: true})
+	r := call(t, h, http.MethodPost, "/v1/people", "acme-ltd", `{"email":"ada@acme.ng","first_name":"Ada","last_name":"Obi","role":"sales"}`)
+	if r.Code != 503 || !strings.Contains(r.Body.String(), "sign_in_email_failed") || len(fake.users) != 0 {
+		t.Fatalf("create with mail down: %d %s, users %d", r.Code, r.Body.String(), len(fake.users))
+	}
+}
+
+func TestWithoutEmailSetUpRealAddressesAreRefusedAndTestOnesWork(t *testing.T) {
+	h, fake, _ := peopleAPIWithMail(t, nil)
+	if r := call(t, h, http.MethodPost, "/v1/people", "acme-ltd", `{"email":"ada@acme.ng","first_name":"Ada","last_name":"Obi","role":"sales"}`); r.Code != 503 || len(fake.users) != 0 {
+		t.Fatalf("real address without mail: %d %s", r.Code, r.Body.String())
+	}
+	if r := call(t, h, http.MethodPost, "/v1/people", "acme-ltd", `{"email":"qa@example.com","first_name":"Q","last_name":"A","role":"sales"}`); r.Code != 201 || !strings.Contains(r.Body.String(), "test_password") {
+		t.Fatalf("test address without mail: %d %s", r.Code, r.Body.String())
+	}
+}
+
+func TestSendingTheSignInAgainOnlyBeforeFirstSignIn(t *testing.T) {
+	mail := &fakeMailer{}
+	h, fake, _ := peopleAPIWithMail(t, mail)
+	waiting := fake.add("acme-ltd", "bo@acme.ng", "sales")
+	fake.users[waiting].RequiredActions = []string{"UPDATE_PASSWORD"}
+	active := fake.add("acme-ltd", "cy@acme.ng", "sales")
+	if r := call(t, h, http.MethodPatch, "/v1/people/"+waiting, "acme-ltd", `{"send_sign_in":true}`); r.Code != 200 || hasPasswordField(r.Body.String()) || len(mail.sent) != 1 || fake.resets != 1 {
+		t.Fatalf("resend: %d %s sent=%d resets=%d", r.Code, r.Body.String(), len(mail.sent), fake.resets)
+	}
+	if r := call(t, h, http.MethodPatch, "/v1/people/"+active, "acme-ltd", `{"send_sign_in":true}`); r.Code != 409 || fake.resets != 1 {
+		t.Fatalf("resend to someone signed in: %d resets=%d", r.Code, fake.resets)
+	}
+	other := fake.add("acme-two", "di@two.ng", "sales")
+	fake.users[other].RequiredActions = []string{"UPDATE_PASSWORD"}
+	if r := call(t, h, http.MethodPatch, "/v1/people/"+other, "acme-ltd", `{"send_sign_in":true}`); r.Code != 404 {
+		t.Fatalf("resend across businesses: %d", r.Code)
+	}
+}
+
+func TestTestAddressesAndBusinessNames(t *testing.T) {
+	for email, want := range map[string]bool{"a@x.test": true, "a@example.com": true, "a@sub.idre.test": true, "a@acme.ng": false, "a@notexample.com": false} {
+		if isTestAddress(email) != want {
+			t.Errorf("isTestAddress(%q) != %v", email, want)
+		}
+	}
+	for name, want := range map[string]string{"Acme Ltd": "Acme Ltd", "Visit http://evil": "", "a\u202etxt": "", "Line\nbreak": ""} {
+		if got := cleanBusinessName(name); got != want {
+			t.Errorf("cleanBusinessName(%q) = %q", name, got)
+		}
+	}
+}
+
+// hasPasswordField: the answer carries a password value (not just the must_set_password flag).
+func hasPasswordField(body string) bool {
+	return strings.Contains(body, `"test_password"`) || strings.Contains(body, `"temporary_password"`)
 }

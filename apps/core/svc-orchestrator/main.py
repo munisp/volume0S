@@ -262,15 +262,24 @@ class PersonCreate(BaseModel):
     first_name: str = Field(min_length=1, max_length=80)
     last_name: str = Field(min_length=1, max_length=80)
     role: Literal[ROLES]  # type: ignore[valid-type]
+    # Shown in the sign-in email; svc-provisioning drops anything that isn't a plain one-line name.
+    business_name: str | None = Field(default=None, max_length=80)
 
 
 class PersonUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: Literal[ROLES] | None = None  # type: ignore[valid-type]
     enabled: bool | None = None
+    # Emails a fresh one-time password to someone who hasn't signed in yet (a lost sign-in email).
+    send_sign_in: bool | None = None
+    business_name: str | None = Field(default=None, max_length=80)
 
     @model_validator(mode="after")
     def something_changes(self) -> "PersonUpdate":
+        if self.send_sign_in:
+            if self.role is not None or self.enabled is not None:
+                raise ValueError("send the sign-in email on its own")
+            return self
         if self.role is None and self.enabled is None:
             raise ValueError("role or enabled is required")
         return self
@@ -356,7 +365,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     @app.post("/v1/people", status_code=201)
     async def add_person(body: PersonCreate, claims: Claims = Depends(need("super-operator"))):
         check_grant(claims, body.role)
-        return await people_service().create(claims.tenant_id, body.model_dump())
+        return await people_service().create(claims.tenant_id, body.model_dump(exclude_none=True))
 
     @app.patch("/v1/people/{person_id}")
     async def update_person(person_id: Annotated[str, Path(pattern=r"^[a-f0-9-]{36}$")], body: PersonUpdate,

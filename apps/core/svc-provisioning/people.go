@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -27,6 +28,9 @@ var (
 	emailRe       = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 	ErrPersonGone = errors.New("person not found in this business")
 	ErrPersonDup  = errors.New("someone with this email already has a sign-in")
+	// ErrAlreadySignedIn: the person chose their own password, so there's no one-time password to send again.
+	ErrAlreadySignedIn = errors.New("they've already signed in and chosen their own password")
+	ErrMailFailed      = errors.New("the sign-in email couldn't be sent")
 )
 
 type Person struct {
@@ -184,6 +188,32 @@ func (k *KeycloakClient) CreatePerson(ctx context.Context, tenantID, email, firs
 	return person, password, err
 }
 
+// ResetOneTimePassword gives someone who hasn't signed in yet a fresh one-time password (for a lost sign-in email).
+// Someone who has already chosen their own password is refused: this must never replace a password in use.
+func (k *KeycloakClient) ResetOneTimePassword(ctx context.Context, tenantID, id string) (Person, string, error) {
+	u, err := k.user(ctx, tenantID, id)
+	if err != nil {
+		return Person{}, "", err
+	}
+	if !slices.Contains(u.RequiredActions, "UPDATE_PASSWORD") {
+		return Person{}, "", ErrAlreadySignedIn
+	}
+	password, err := oneTimePassword()
+	if err != nil {
+		return Person{}, "", err
+	}
+	_, status, err := k.request(ctx, http.MethodPut, "/users/"+url.PathEscape(id)+"/reset-password", nil,
+		map[string]any{"type": "password", "value": password, "temporary": true})
+	if err != nil {
+		return Person{}, "", err
+	}
+	if status != http.StatusNoContent {
+		return Person{}, "", fmt.Errorf("Keycloak password reset returned %d", status)
+	}
+	person, err := k.toPerson(ctx, u)
+	return person, password, err
+}
+
 // UpdatePerson changes the role and/or turns the sign-in on or off.
 func (k *KeycloakClient) UpdatePerson(ctx context.Context, tenantID, id string, role *string, enabled *bool) (Person, error) {
 	u, err := k.user(ctx, tenantID, id)
@@ -278,10 +308,11 @@ func (a *API) listPeople(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) createPerson(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Email     string `json:"email"`
-		FirstName string `json:"first_name"`
-		LastName  string `json:"last_name"`
-		Role      string `json:"role"`
+		Email        string `json:"email"`
+		FirstName    string `json:"first_name"`
+		LastName     string `json:"last_name"`
+		Role         string `json:"role"`
+		BusinessName string `json:"business_name"`
 	}
 	if !decode(w, r, &input) {
 		return
@@ -291,28 +322,83 @@ func (a *API) createPerson(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "an email, first name, last name and a known role are required")
 		return
 	}
-	person, password, err := a.keycloak.CreatePerson(r.Context(), r.Header.Get("X-VolumeOS-Tenant"), input.Email, input.FirstName, input.LastName, input.Role)
+	testAddress := isTestAddress(strings.TrimSpace(input.Email))
+	if a.mailer == nil && !testAddress {
+		peopleError(w, ErrMailNotConfigured)
+		return
+	}
+	tenant := r.Header.Get("X-VolumeOS-Tenant")
+	person, password, err := a.keycloak.CreatePerson(r.Context(), tenant, input.Email, input.FirstName, input.LastName, input.Role)
 	if err != nil {
 		peopleError(w, err)
 		return
 	}
-	// The one-time password is shown once, to the operator who made the sign-in, and never stored by VolumeOS.
-	writeJSON(w, http.StatusCreated, map[string]any{"person": person, "temporary_password": password})
+	a.deliverSignIn(w, r, person, password, input.BusinessName, testAddress, http.StatusCreated, func() {
+		// Nobody could reach a sign-in whose details never arrived: remove it so it can simply be added again.
+		_, _, _ = a.keycloak.request(r.Context(), http.MethodDelete, "/users/"+url.PathEscape(person.ID), nil, nil)
+	})
+}
+
+// deliverSignIn emails the one-time password to the person (never to the operator). A test address isn't
+// emailed; its password comes back as test_password so test runs can sign in.
+func (a *API) deliverSignIn(w http.ResponseWriter, r *http.Request, person Person, password, business string, testAddress bool,
+	status int, undo func()) {
+	if testAddress {
+		writeJSON(w, status, map[string]any{"person": person, "sign_in_email": "not_sent_test_address", "test_password": password})
+		return
+	}
+	if err := a.mailer.SendSignIn(r.Context(), SignInEmail{To: person.Email, FirstName: person.FirstName, Business: business, Password: password}); err != nil {
+		slog.Error("sign-in email failed", "person", person.ID, "error", err)
+		if undo == nil {
+			writeError(w, http.StatusServiceUnavailable, "sign_in_email_failed", "the sign-in email couldn't be sent; try again")
+			return
+		}
+		undo()
+		peopleError(w, ErrMailFailed)
+		return
+	}
+	writeJSON(w, status, map[string]any{"person": person, "sign_in_email": "sent"})
 }
 
 func (a *API) updatePerson(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Role    *string `json:"role"`
-		Enabled *bool   `json:"enabled"`
+		Role         *string `json:"role"`
+		Enabled      *bool   `json:"enabled"`
+		SendSignIn   bool    `json:"send_sign_in"`
+		BusinessName string  `json:"business_name"`
 	}
 	if !decode(w, r, &input) {
+		return
+	}
+	tenant, id := r.Header.Get("X-VolumeOS-Tenant"), r.PathValue("person")
+	if input.SendSignIn {
+		if input.Role != nil || input.Enabled != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "send the sign-in email on its own, not with other changes")
+			return
+		}
+		current, err := a.keycloak.user(r.Context(), tenant, id)
+		if err != nil {
+			peopleError(w, err)
+			return
+		}
+		testAddress := isTestAddress(current.Email)
+		if a.mailer == nil && !testAddress {
+			peopleError(w, ErrMailNotConfigured)
+			return
+		}
+		person, password, err := a.keycloak.ResetOneTimePassword(r.Context(), tenant, id)
+		if err != nil {
+			peopleError(w, err)
+			return
+		}
+		a.deliverSignIn(w, r, person, password, input.BusinessName, testAddress, http.StatusOK, nil)
 		return
 	}
 	if (input.Role == nil && input.Enabled == nil) || (input.Role != nil && !slices.Contains(personRoles, *input.Role)) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "a known role and/or enabled is required")
 		return
 	}
-	person, err := a.keycloak.UpdatePerson(r.Context(), r.Header.Get("X-VolumeOS-Tenant"), r.PathValue("person"), input.Role, input.Enabled)
+	person, err := a.keycloak.UpdatePerson(r.Context(), tenant, id, input.Role, input.Enabled)
 	if err != nil {
 		peopleError(w, err)
 		return
@@ -326,6 +412,12 @@ func peopleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "that person isn't in this business")
 	case errors.Is(err, ErrPersonDup):
 		writeError(w, http.StatusConflict, "person_exists", err.Error())
+	case errors.Is(err, ErrAlreadySignedIn):
+		writeError(w, http.StatusConflict, "already_signed_in", err.Error())
+	case errors.Is(err, ErrMailNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, "email_not_configured", err.Error())
+	case errors.Is(err, ErrMailFailed):
+		writeError(w, http.StatusServiceUnavailable, "sign_in_email_failed", "the sign-in email couldn't be sent, so the sign-in wasn't made; try again")
 	default:
 		writeError(w, http.StatusBadGateway, "identity_unavailable", "Keycloak could not complete the change")
 	}
