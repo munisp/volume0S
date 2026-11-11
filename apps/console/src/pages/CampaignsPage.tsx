@@ -59,6 +59,7 @@ export function CampaignsPage() {
         <button className="button button-secondary" onClick={() => void refresh()} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spin' : ''} /> Refresh</button>
         {allowed(roles, 'startCampaign') && <button className="button button-primary" onClick={() => setModal(true)} disabled={feed.load === 'error'} title={feed.load === 'error' ? 'Paused until the campaign list loads' : undefined}><Plus size={15} /> New campaign</button>}
       </>} />
+    {!allowed(roles, 'startCampaign') && <RoleNote action="startCampaign" />}
     {tenant && tenant.state !== 'active' && <Note tone="attention">{tenant.name} is <strong>{tenant.state}</strong>: drafts can be written and reviewed, but nothing is sent to customers until the business is <strong>Active</strong> (Client › Lifecycle).</Note>}
     {missing && <Note tone="failed">There's no campaign “{id}” in this business. The link may be mistyped, or the campaign belongs to another business.</Note>}
     {feed.load === 'error' && <Note tone="failed">The campaign list didn't load: {feed.error} Actions are paused until it does.</Note>}

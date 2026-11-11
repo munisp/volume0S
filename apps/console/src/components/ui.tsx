@@ -86,7 +86,7 @@ export function Note({ tone, children }: { tone?: 'attention' | 'failed' | 'done
 
 /** Why an action is unavailable to this person: shown in place of an enabled button they couldn't use. */
 export function RoleNote({ action }: { action: Action }) {
-  return <div className="note"><Lock size={15} /><span>{needs(action)}. You can see this, but the server would refuse the action.</span></div>
+  return <div className="note"><Lock size={15} /><span>{needs(action)} to do this. Your role can view it but not change it; a super operator can change your role under Client › People.</span></div>
 }
 
 /* ------------------------------------------------------------------ values */

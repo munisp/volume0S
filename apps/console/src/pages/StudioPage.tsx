@@ -104,6 +104,7 @@ export function StudioPage() {
         <button className="button button-secondary" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button>
         {allowed(roles, 'startStudioPack') && <button className="button button-primary" onClick={() => setModal(true)}><Plus size={15} /> New pack</button>}
       </>} />
+    {!allowed(roles, 'startStudioPack') && <RoleNote action="startStudioPack" />}
     {missing && <Note tone="failed">There's no Studio pack “{id}” in this business. The link may be mistyped, or the pack belongs to another business.</Note>}
     {load.state === 'error' && <Note tone="failed">The pack list didn't load: {load.error}</Note>}
     <div className="workspace-grid">
@@ -139,7 +140,7 @@ export function StudioPage() {
             {!reviewReady && <span className="small muted">Approval unlocks once every image of the current manifest has loaded.</span>}
           </div>
         </div> : <RoleNote action="reviewStudioPack" />)}
-      </section> : <section className="review-panel"><Empty title="Select a pack" /></section>}
+      </section> : <section className="review-panel">{packs.length ? <Empty title="Select a pack" /> : <StudioHowItWorks canStart={allowed(roles, 'startStudioPack')} onStart={() => setModal(true)} />}</section>}
     </div>
 
     {modal && <Modal title="New Studio pack" description="Generates images into QA storage only. Delivery needs a separate approval." onClose={() => setModal(false)} wide>
@@ -189,5 +190,25 @@ function DeliveredFiles({ packId }: { packId: string }) {
       <span className="small muted" style={{ minWidth: 150 }}>{channel === 'whatsapp' ? 'WhatsApp (1080 px)' : 'Jumia (1000 px, white)'}</span>
       {files.filter(file => file.path.startsWith(channel + '/')).map((file, index) => <button key={file.path} className="button button-secondary small" onClick={() => void download(file)}>Image {index + 1}</button>)}
     </div>)}
+  </div>
+}
+
+/** Shown before the first pack: the whole workflow, so nobody faces an empty page wondering what Studio does. */
+function StudioHowItWorks({ canStart, onStart }: { canStart: boolean; onStart: () => void }) {
+  const steps = [
+    ['Upload a product photo', 'A clear photo of one product (PNG, JPEG or WebP, up to 10 MB), with optional style notes such as "on a wooden table, warm light".'],
+    ['Images are generated', 'Studio keeps the product and restyles the photo: 5, 7 or 12 images depending on the tier. On this server it takes about 7–10 minutes.'],
+    ['A person checks them', 'The images wait here for review. Approve the set, or reject it with a reason; nothing reaches the client before approval.'],
+    ['Download the files', 'Approved images become 1080×1080 WhatsApp and 1000×1000 white-background Jumia JPEGs, ready to download.'],
+  ]
+  return <div className="stack" aria-label="How Studio works">
+    <span className="eyebrow">How Shopfront Studio works</span>
+    <ol className="plain-list" style={{ display: 'grid', gap: 12, paddingLeft: 0, listStyle: 'none' }}>
+      {steps.map(([title, text], index) => <li key={title} className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
+        <strong className="mono" style={{ minWidth: 22 }}>{index + 1}</strong>
+        <div><strong>{title}</strong><p className="small muted" style={{ margin: '2px 0 0' }}>{text}</p></div>
+      </li>)}
+    </ol>
+    {canStart && <div><button className="button button-primary" onClick={onStart}><Plus size={15} /> Start your first pack</button></div>}
   </div>
 }
