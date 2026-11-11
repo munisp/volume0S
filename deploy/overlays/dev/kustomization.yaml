@@ -20,6 +20,7 @@ resources:
   - ../../../apps/workers/campaign-worker/k8s
   - ../../../apps/workers/studio-worker/k8s
   - ../../../apps/workers/offer-worker/k8s
+  - ../../../apps/workers/insights-indexer/k8s
   - ../../../apps/workers/synthetic-probe/k8s
   - ../../../policies
 labels:

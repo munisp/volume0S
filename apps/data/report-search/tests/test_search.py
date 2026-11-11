@@ -54,3 +54,12 @@ def test_bounded_search_contract(changes):
 def test_tenant_claim_cannot_be_injected():
     with pytest.raises(SearchError):
         build_query(request(), "tenant-a' OR 1=1")
+
+
+
+def test_free_text_never_targets_date_fields():
+    from search import SearchRequest, build_query
+    for kind in ("reports", "logs"):
+        _, body = build_query(SearchRequest(kind, "invoice", "2026-10-01", "2026-10-28"), "tenant-a")
+        fields = body["query"]["bool"]["must"][0]["multi_match"]["fields"]
+        assert "event_date" not in fields and fields

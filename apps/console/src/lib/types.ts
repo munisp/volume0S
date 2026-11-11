@@ -308,3 +308,6 @@ export type CampaignResult = { cycle_id: string; channel: 'email' | 'whatsapp' |
 export type CampaignContact = { id: string; first_name: string; email: string | null; phone: string | null; email_consent: boolean; whatsapp_consent: boolean; source: string; created_at: string }
 export type SocialAccount = { id: string; name: string; network: string; picture: string; disabled: boolean }
 export type SocialStatus = { available: boolean; connected: boolean; accounts: SocialAccount[]; postiz_url?: string; problem?: string }
+export type InsightMetrics = { paid_in_minor: number; topups?: number; campaign_spend_minor?: number; charged_minor: number; invoices: number; receipts: number; emails: number; whatsapp: number; social_posts: number; campaigns_sent: number; studio_packs: number; studio_images: number; contacts_added: number }
+export type InsightMonth = { month: string; title: string; summary: string; metrics: InsightMetrics; updated_at: string | null }
+export type ActivityRow = { trace_id: string; event_date: string; message: string; service: string; level: string; tenant_id: string }

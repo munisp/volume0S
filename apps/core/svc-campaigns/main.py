@@ -46,6 +46,8 @@ class DispatchStart(InputModel):
     cycle_id: str = Field(pattern=SAFE_ID.pattern)
     draft_id: str = Field(pattern=SAFE_ID.pattern)
     approval_id: str = Field(min_length=1, max_length=128)
+    amount_minor: int = Field(default=0, ge=0, le=1_000_000_000_000)  # the campaign's charge, for reporting
+    currency: Literal["NGN", "USD"] = "NGN"
 
 
 class Contact(InputModel):

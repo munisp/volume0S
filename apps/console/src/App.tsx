@@ -121,7 +121,7 @@ function OperatorApp() {
       { to: '/catalogue', label: 'Catalogue', icon: Layers3 },
       ...(sees(roles, 'finance') ? [{ to: '/finance', label: 'Finance', icon: Landmark }] : []),
     ] },
-    ...(sees(roles, 'intelligence') ? [{ label: 'Insight', items: [{ to: '/intelligence', label: 'Intelligence', icon: LineChart, soon: 'Not built' }] }] : []),
+    ...(sees(roles, 'intelligence') ? [{ label: 'Insight', items: [{ to: '/intelligence', label: 'Intelligence', icon: LineChart }] }] : []),
     ...(sees(roles, 'administration') ? [{ label: 'Admin', items: [{ to: '/admin', label: 'Administration', icon: Settings2 }] }] : []),
   ].filter(group => group.items.length > 0)
   return <Shell groups={groups} crumbs={crumbs} footnote={<>Signed in as <strong>{[...roles].map(roleLabel).join(', ') || 'no role'}</strong>{platform ? ' · platform' : ''}</>}>

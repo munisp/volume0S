@@ -1,6 +1,6 @@
 import type { ContactInput } from './contacts'
 import type {
-  ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignContact, CampaignDraft, CampaignResult, CampaignSnapshot, SocialAccount, SocialStatus,
+  ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignContact, CampaignDraft, CampaignResult, CampaignSnapshot, SocialAccount, SocialStatus, InsightMonth, ActivityRow,
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace, TenantSummary, Person,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
@@ -112,6 +112,15 @@ export class VolumeOSApi {
   /** The AI draft a person approves, and the per-channel results once it was sent. */
   campaignDetail(campaignId: string) {
     return this.request<{ draft: CampaignDraft | null; results: CampaignResult[] }>(this.orchestratorUrl, `/v1/campaigns/${encodeURIComponent(campaignId)}/detail`)
+  }
+
+  insights(tenantId: string, months = 6) {
+    return this.request<{ months: InsightMonth[] }>(this.coreUrl, `/v1/tenants/${encodeURIComponent(tenantId)}/insights?months=${months}`)
+  }
+
+  searchActivity(tenantId: string, q: string, startDate: string, endDate: string) {
+    const query = new URLSearchParams({ q, start_date: startDate, end_date: endDate, size: '50' })
+    return this.request<{ rows: ActivityRow[] }>(this.coreUrl, `/v1/tenants/${encodeURIComponent(tenantId)}/search/logs?${query}`)
   }
 
   social() {

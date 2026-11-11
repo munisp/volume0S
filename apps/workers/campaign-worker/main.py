@@ -203,7 +203,9 @@ async def dispatch_campaign(value: CampaignInput, draft_id: str, approval_id: st
     result = await call(
         "CAMPAIGN_DISPATCH_URL", "/v1/dispatches", value.tenant_id,
         f"campaign:{value.campaign_id}:{value.cycle_id}:dispatch",
-        {"campaign_id": value.campaign_id, "cycle_id": value.cycle_id, "draft_id": draft_id, "approval_id": approval_id},
+        {"campaign_id": value.campaign_id, "cycle_id": value.cycle_id, "draft_id": draft_id, "approval_id": approval_id,
+         # What this campaign is charged once sent (reserved before, posted after): recorded for reporting only.
+         "amount_minor": value.amount_minor, "currency": value.currency},
     )
     return parse_dispatch_outcome(value, result)
 

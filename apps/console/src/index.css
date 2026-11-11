@@ -558,3 +558,13 @@ table.data tr.diag td { background: var(--panel-sunk); }
 
 .draft-preview { border: 1px solid var(--border, #e3e3e3); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .draft-preview p { margin: 0; }
+
+/* Intelligence: single-series monthly bars (thin marks, 4px rounded tops on a recessive baseline, 2px gaps). */
+.chart-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.bars { display: flex; align-items: flex-end; gap: 2px; height: 160px; padding-bottom: 22px; border-bottom: 1px solid var(--line, #e2e0da); position: relative; }
+.bar-slot { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; outline: none; }
+.bar { width: 60%; max-width: 36px; background: var(--brand); border-radius: 4px 4px 0 0; }
+.bar-slot:hover .bar, .bar-slot:focus .bar { background: var(--brand-strong); }
+.bar-label { position: absolute; bottom: -20px; font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.bar-tip { position: absolute; bottom: calc(100% + 4px); background: var(--ink); color: #fff; font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; display: flex; gap: 6px; z-index: 2; }

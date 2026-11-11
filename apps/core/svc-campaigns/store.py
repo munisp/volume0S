@@ -123,6 +123,11 @@ BEGIN
 END $$;
 """))
 
+SCHEMA.append(("003_dispatch_amount", """
+ALTER TABLE campaign_dispatches ADD COLUMN IF NOT EXISTS amount_minor bigint NOT NULL DEFAULT 0;
+ALTER TABLE campaign_dispatches ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'NGN';
+"""))
+
 CONTACT_COLUMNS = "id,tenant_id,first_name,email,phone,email_consent,whatsapp_consent,source,created_at,updated_at"
 
 
@@ -267,9 +272,10 @@ class PostgresCampaignStore:
         """Records the dispatch once; returns its stored result if it already finished (a retried request)."""
         async with self.tenant_tx(tenant_id) as connection:
             await connection.execute(
-                "INSERT INTO campaign_dispatches (id,tenant_id,campaign_id,cycle_id,draft_id,approval_id) "
-                "VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id, campaign_id, cycle_id) DO NOTHING",
-                dispatch_id, tenant_id, value["campaign_id"], value["cycle_id"], value["draft_id"], value["approval_id"])
+                "INSERT INTO campaign_dispatches (id,tenant_id,campaign_id,cycle_id,draft_id,approval_id,amount_minor,currency) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant_id, campaign_id, cycle_id) DO NOTHING",
+                dispatch_id, tenant_id, value["campaign_id"], value["cycle_id"], value["draft_id"], value["approval_id"],
+                int(value.get("amount_minor") or 0), value.get("currency", "NGN"))
             row = await connection.fetchrow(
                 "SELECT result FROM campaign_dispatches WHERE tenant_id=$1 AND campaign_id=$2 AND cycle_id=$3",
                 tenant_id, value["campaign_id"], value["cycle_id"])

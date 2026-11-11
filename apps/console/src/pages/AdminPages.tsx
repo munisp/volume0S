@@ -1,8 +1,9 @@
+import { Intelligence } from '../sections/Intelligence'
 import { useState, type FormEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { useSession, errorText } from '../state/session-context'
 import { ACTIONS, allowed, roleLabel, type Action } from '../lib/access'
-import { Confirm, Empty, Field, Modal, Note, PageHead, Panel, RoleNote, Status, Submit } from '../components/ui'
+import { Confirm, Empty, Field, Modal, PageHead, Panel, RoleNote, Status, Submit } from '../components/ui'
 
 const ACTION_LABEL: Record<Action, string> = {
   createTenant: 'Create the business record', managePeople: 'Add people and change their roles', transitionTenant: 'Change business status (incl. offboarding)', suspendOutbound: 'Suspend or restore outbound messages',
@@ -115,14 +116,8 @@ export function AdminPage() {
 
 export function IntelligencePage() {
   return <div className="page">
-    <PageHead eyebrow="Insight" title="Intelligence" description="Business analytics and geospatial market intelligence for Nigerian MSMEs." />
-    <Panel title="Not built in the console yet">
-      <div className="stack">
-        <p className="body-copy">VolumeOS has the groundwork for this in source: data contracts for raw, cleaned and modelled layers, geospatial contracts, a census sync service and a report search service. None of them is running on this deployment, and no API serves analytics to the console, so there is nothing real to chart.</p>
-        <p className="body-copy">No sample maps, market statistics or business counts are shown in their place. When the data services run, this page will show business distribution, density and regional performance from their results.</p>
-        <Note>Service-level figures you can trust today are on Overview and Operations: work waiting, running, failed and finished, per type of work.</Note>
-      </div>
-    </Panel>
+    <PageHead eyebrow="Insight" title="Intelligence" description="This business's own figures: money in and out, campaign reach and Studio output, updated every 10 minutes." />
+    <Intelligence />
   </div>
 }
 
