@@ -22,6 +22,9 @@ var initialMigration string
 //go:embed migrations/002_messaging.sql
 var messagingMigration string
 
+//go:embed migrations/003_force_rls.sql
+var forceRLSMigration string
+
 type PostgresStore struct {
 	pool           *pgxpool.Pool
 	suppressionKey []byte
@@ -69,7 +72,7 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 	migrations := []struct {
 		version string
 		sql     string
-	}{{"001_initial", initialMigration}, {"002_messaging", messagingMigration}}
+	}{{"001_initial", initialMigration}, {"002_messaging", messagingMigration}, {"003_force_rls", forceRLSMigration}}
 	for _, migration := range migrations {
 		result, err := conn.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT DO NOTHING`, migration.version)
 		if err != nil {
@@ -265,7 +268,7 @@ func (s *PostgresStore) CreateWorkspace(ctx context.Context, tenantID, name stri
 func (s *PostgresStore) CreateSubscription(ctx context.Context, tenantID, offer, tier string) (Subscription, error) {
 	sub := Subscription{ID: newID(), TenantID: tenantID, Offer: offer, Tier: tier, CreatedAt: time.Now().UTC()}
 	if err := ValidateSubscription(offer, tier); err != nil {
-		return sub, ErrInvalidChange
+		return sub, ErrNotOnSale
 	}
 	err := s.tx(ctx, tenantID, func(tx pgx.Tx) error {
 		var state Lifecycle

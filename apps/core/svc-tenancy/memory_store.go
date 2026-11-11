@@ -126,7 +126,10 @@ func (s *MemoryStore) CreateSubscription(_ context.Context, tenantID, offer, tie
 	if !ok {
 		return Subscription{}, ErrNotFound
 	}
-	if err := ValidateSubscription(offer, tier); err != nil || t.State == Offboarded {
+	if err := ValidateSubscription(offer, tier); err != nil {
+		return Subscription{}, ErrNotOnSale
+	}
+	if t.State == Offboarded {
 		return Subscription{}, ErrInvalidChange
 	}
 	for _, existing := range t.Subscriptions {

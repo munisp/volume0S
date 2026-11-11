@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -100,4 +101,16 @@ func fmtInt(value int64) string {
 		return "1"
 	}
 	panic("test helper only supports the initial version")
+}
+
+func TestAnOfferNotOnSaleSaysSo(t *testing.T) {
+	handler, _ := testServer(t)
+	createTenant(t, handler, "tenant-a")
+	// Offer 19 is priced in the catalog only as a proposal (Volume II): it can't be bought, and the answer says why.
+	for _, body := range []string{`{"offer":"19","tier":"starter"}`, `{"offer":"03","tier":"starter"}`} {
+		r := request(t, handler, http.MethodPost, "/v1/subscriptions", "tenant-a", "super-operator", body)
+		if r.Code != http.StatusUnprocessableEntity || !strings.Contains(r.Body.String(), "offer_not_on_sale") || !strings.Contains(r.Body.String(), "isn't on sale yet") {
+			t.Fatalf("%s: %d %s", body, r.Code, r.Body.String())
+		}
+	}
 }

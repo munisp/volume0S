@@ -14,6 +14,9 @@ var (
 	ErrNotFound      = errors.New("resource not found")
 	ErrConflict      = errors.New("resource conflict")
 	ErrInvalidChange = errors.New("invalid state change")
+	// ErrNotOnSale: the offer or tier can't be subscribed to (unpriced, or priced only as a proposal awaiting
+	// approval and delivery, like Volume II's Offers 19–26).
+	ErrNotOnSale = errors.New("that offer or tier isn't on sale yet")
 )
 
 type Lifecycle string

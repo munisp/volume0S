@@ -210,6 +210,8 @@ func respond(w http.ResponseWriter, r *http.Request, status int, value any, err 
 		writeError(w, http.StatusNotFound, "not_found", "resource not found in tenant scope")
 	case errors.Is(err, ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", "resource exists or version is stale")
+	case errors.Is(err, ErrNotOnSale):
+		writeError(w, http.StatusUnprocessableEntity, "offer_not_on_sale", err.Error())
 	case errors.Is(err, ErrInvalidChange):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_state", err.Error())
 	default:
