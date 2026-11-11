@@ -260,7 +260,17 @@ async def store_qa_assets(value: StudioInput, images: list[dict[str, str]]) -> Q
                            "workflow_version": WORKFLOW_VERSION, "assets": keys, "qa_status": "pending"}, indent=2).encode()
     manifest_sha256 = hashlib.sha256(manifest).hexdigest()
     await asyncio.to_thread(store.put, f"{qa_prefix(value)}/manifest.json", manifest, "application/json")
+    await release_comfy_memory()
     return QAManifest(keys, manifest_sha256)
+
+
+async def release_comfy_memory() -> None:
+    """Asks ComfyUI to unload its models once a pack's images are saved. On a CPU host ComfyUI otherwise keeps
+    ~4.6 GiB of weights in RAM between packs (the next pack reloads them in seconds). Best effort: never fails a pack."""
+    try:
+        await comfy_request("POST", "/free", json={"unload_models": True, "free_memory": True})
+    except Exception as exc:  # noqa: BLE001 - housekeeping only
+        activity.logger.warning("ComfyUI didn't release its memory: %s", exc)
 
 
 @activity.defn
