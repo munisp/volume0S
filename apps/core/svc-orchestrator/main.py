@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 import boto3
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Path, Request
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
@@ -22,7 +22,7 @@ from temporalio.service import RPCError, RPCStatusCode
 from assets import QAAssetError, S3QAAssets
 from auth import AuthenticationError, Claims, OIDCAuthenticator, scope_claims
 from money import MoneyServiceError, MoneyServices
-from people import ROLES, PeopleService, PeopleServiceError
+from people import ROLES, CampaignsService, PeopleService, PeopleServiceError
 from workflows import TemporalWorkflows
 
 ID_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
@@ -65,6 +65,18 @@ class CampaignStart(InputModel):
     brief: str = Field(min_length=1, max_length=10_000)
     amount_minor: StrictInt = Field(gt=0, le=1_000_000_000_000)
     currency: Literal["NGN", "USD"] = "NGN"
+
+
+class ContactRow(InputModel):
+    first_name: str = Field(default="", max_length=80)
+    email: str | None = Field(default=None, max_length=254)
+    phone: str | None = Field(default=None, max_length=20)
+    email_consent: bool = False
+    whatsapp_consent: bool = False
+
+
+class ContactImport(InputModel):
+    contacts: list[ContactRow] = Field(min_length=1, max_length=5000)
 
 
 class CampaignApproval(InputModel):
@@ -214,6 +226,8 @@ async def lifespan(app: FastAPI):
         app.state.money = MoneyServices.from_env()
     if app.state.people is None and app.state.configure_money:
         app.state.people = PeopleService.from_env()
+    if app.state.campaigns is None and app.state.configure_money:
+        app.state.campaigns = CampaignsService.from_env()
     yield
 
 
@@ -286,13 +300,14 @@ class PersonUpdate(BaseModel):
 
 
 def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any = None, money: Any = None,
-               people: Any = None) -> FastAPI:
+               people: Any = None, campaigns: Any = None) -> FastAPI:
     app = FastAPI(title="VolumeOS Orchestrator", version="0.5.0", lifespan=lifespan)
     app.state.workflows = workflows
     app.state.authenticator = authenticator
     app.state.qa_assets = qa_assets
     app.state.money = money
     app.state.people = people
+    app.state.campaigns = campaigns
     app.state.configure_money = workflows is None
 
     @app.middleware("http")
@@ -353,6 +368,11 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
             raise error("Managing people isn't set up on this deployment.", 503, "people_not_configured")
         return app.state.people
 
+    def campaigns_service() -> Any:
+        if app.state.campaigns is None:
+            raise error("Campaigns aren't set up on this deployment.", 503, "campaigns_not_configured")
+        return app.state.campaigns
+
     def check_grant(claims: Claims, role: str | None) -> None:
         # A business's own super operator runs its team; only the agency's platform operators create super operators.
         if role == "super-operator" and not claims.platform:
@@ -405,6 +425,25 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
             "approval_id": body.approval_id, "approver": claims.actor,
         })
         return {"status": "accepted", "campaign_id": campaign_id}
+
+    @app.get("/v1/campaigns/{campaign_id}/detail")
+    async def campaign_detail(campaign_id: ResourceId, claims: Claims = Depends(need("reader"))):
+        """The AI draft a person approves, and who it reached per channel once sent."""
+        return await campaigns_service().campaign(claims.tenant_id, campaign_id)
+
+    # Contacts are customers' personal data: only the roles that run campaigns see or change them.
+    @app.get("/v1/contacts")
+    async def contacts(limit: Annotated[int, Query(ge=1, le=500)] = 50, offset: Annotated[int, Query(ge=0)] = 0,
+                       claims: Claims = Depends(need("delivery"))):
+        return await campaigns_service().contacts(claims.tenant_id, limit, offset)
+
+    @app.post("/v1/contacts/import")
+    async def import_contacts(body: ContactImport, claims: Claims = Depends(need("delivery"))):
+        return await campaigns_service().import_contacts(claims.tenant_id, body.model_dump())
+
+    @app.delete("/v1/contacts/{contact_id}")
+    async def delete_contact(contact_id: Annotated[str, Path(pattern=r"^[a-f0-9-]{36}$")], claims: Claims = Depends(need("delivery"))):
+        return await campaigns_service().delete_contact(claims.tenant_id, contact_id)
 
     @app.get("/v1/studio/packs")
     async def studio_packs(claims: Claims = Depends(need("reader"))):

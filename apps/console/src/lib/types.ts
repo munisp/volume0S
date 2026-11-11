@@ -302,3 +302,7 @@ export type EngagementStartInput = {
   scope: string
   requested_outcome: string
 }
+
+export type CampaignDraft = { draft_id: string; campaign_id: string; subject: string; email_body: string; whatsapp_text: string; model: string; created_at: string }
+export type CampaignResult = { cycle_id: string; channel: 'email' | 'whatsapp'; status: 'sent' | 'test_address' | 'blocked' | 'failed'; count: number }
+export type CampaignContact = { id: string; first_name: string; email: string | null; phone: string | null; email_consent: boolean; whatsapp_consent: boolean; source: string; created_at: string }

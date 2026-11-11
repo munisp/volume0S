@@ -7,12 +7,13 @@ import { allowed } from '../lib/access'
 import { byRecent } from '../lib/workflows'
 import { Confirm, Empty, Field, Modal, Note, PageHead, RoleNote, StageSteps, Submit, When, WorkStatus } from '../components/ui'
 import { dateTime, money } from '../lib/format'
+import { CampaignDraftPanel, ContactsPanel } from '../sections/CampaignContent'
 
 const ID_PATTERN = '[a-zA-Z0-9][a-zA-Z0-9._:\\-]{0,127}'
 
 /** Offers 01 Come-Back Engine and 02 Content Cadence run as campaign workflows. */
 export function CampaignsPage() {
-  const { api, roles, notify } = useSession()
+  const { api, roles, notify, tenant } = useSession()
   const { feeds, refresh, refreshing } = useOperations()
   const { id } = useParams()
   const navigate = useNavigate()
@@ -58,6 +59,7 @@ export function CampaignsPage() {
         <button className="button button-secondary" onClick={() => void refresh()} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spin' : ''} /> Refresh</button>
         {allowed(roles, 'startCampaign') && <button className="button button-primary" onClick={() => setModal(true)} disabled={feed.load === 'error'} title={feed.load === 'error' ? 'Paused until the campaign list loads' : undefined}><Plus size={15} /> New campaign</button>}
       </>} />
+    {tenant && tenant.state !== 'active' && <Note tone="attention">{tenant.name} is <strong>{tenant.state}</strong>: drafts can be written and reviewed, but nothing is sent to customers until the business is <strong>Active</strong> (Client › Lifecycle).</Note>}
     {missing && <Note tone="failed">There's no campaign “{id}” in this business. The link may be mistyped, or the campaign belongs to another business.</Note>}
     {feed.load === 'error' && <Note tone="failed">The campaign list didn't load: {feed.error} Actions are paused until it does.</Note>}
     <div className="workspace-grid">
@@ -78,6 +80,7 @@ export function CampaignsPage() {
           <div className="fact"><span>Last activity</span><strong>{dateTime(selected.updatedAt)}</strong></div>
           <div className="fact"><span>Approval window</span><strong>24 hours</strong></div>
         </div>
+        <CampaignDraftPanel campaignId={selected.id} status={selected.status} />
         {selected.error && <Note tone="failed">{selected.error}{selected.stalledAt ? ` (stopped while ${selected.stalledAt.replaceAll('_', ' ')})` : ''}</Note>}
         {selected.status === 'awaiting_approval' && (allowed(roles, 'approveCampaign')
           ? <div className="approval-form">
@@ -88,6 +91,7 @@ export function CampaignsPage() {
         {selected.status === 'approved' && <Note>Approved, not yet delivered: the workflow reserves funds and sends next.</Note>}
       </section> : <section className="review-panel"><Empty title="Select a campaign" /></section>}
     </div>
+    <ContactsPanel />
 
     {modal && <Modal title="New campaign" description="Starts a draft that waits for approval. Nothing is reserved or sent until a person approves it." onClose={() => setModal(false)} wide>
       <form onSubmit={start} className="form-stack">
@@ -101,7 +105,7 @@ export function CampaignsPage() {
       </form>
     </Modal>}
     {confirm && selected && <Confirm title={`Approve ${selected.title}?`} confirmLabel="Approve and continue" busy={busy} onCancel={() => setConfirm(false)} onConfirm={approve}>
-      <p>Approving lets the workflow reserve <strong>{money(selected.amountMinor, selected.currency)}</strong> from the prepaid balance and send the campaign. If sending fails, the reservation is released.</p>
+      <p>Approving sends the draft above to every contact who agreed to hear from this business, and charges <strong>{money(selected.amountMinor, selected.currency)}</strong> from the prepaid balance. If nothing can be sent, the charge is released.</p>
     </Confirm>}
   </div>
 }

@@ -72,6 +72,7 @@ export const ACTIONS = {
   subscribe: ['sales'],
   startCampaign: ['delivery'],
   approveCampaign: ['delivery'],
+  manageContacts: ['delivery'],
   startStudioPack: ['delivery'],
   reviewStudioPack: ['delivery'],
   startOfferJob: ['delivery'],

@@ -103,3 +103,48 @@ def test_the_business_name_goes_to_the_sign_in_email_and_resending_is_its_own_re
     assert people.calls[0] == ("create", "demo-tenant", {**NEW, "role": "sales", "business_name": "Demo Tenant Ltd"})
     assert people.calls[1] == ("update", "demo-tenant", other, {"send_sign_in": True, "business_name": "Demo Tenant Ltd"})
     assert len(people.calls) == 2
+
+
+class FakeCampaigns:
+    def __init__(self):
+        self.calls: list[tuple[Any, ...]] = []
+
+    async def contacts(self, tenant_id, limit, offset):
+        self.calls.append(("contacts", tenant_id, limit, offset))
+        return {"contacts": [], "total": 0}
+
+    async def import_contacts(self, tenant_id, payload):
+        self.calls.append(("import", tenant_id, payload))
+        return {"added": len(payload["contacts"]), "updated": 0}
+
+    async def delete_contact(self, tenant_id, contact_id):
+        self.calls.append(("delete", tenant_id, contact_id))
+        return {"deleted": True}
+
+    async def campaign(self, tenant_id, campaign_id):
+        self.calls.append(("campaign", tenant_id, campaign_id))
+        return {"draft": None, "results": []}
+
+
+def campaigns_client(claims: Claims):
+    campaigns = FakeCampaigns()
+    app = create_app(FakeWorkflows(), FakeAuthenticator(claims), FakeQAAssets(), people=FakePeople(), campaigns=campaigns)
+    return TestClient(app), campaigns
+
+
+def test_contacts_are_for_the_roles_that_run_campaigns_and_scoped_to_the_business():
+    delivery = Claims("demo-tenant", "d", frozenset({"delivery"}))
+    reader = Claims("demo-tenant", "r", frozenset({"reader"}))
+    client, campaigns = campaigns_client(delivery)
+    with client:
+        assert client.get("/v1/contacts", headers=auth()).status_code == 200
+        assert client.post("/v1/contacts/import", headers=auth(), json={"contacts": [{"email": "a@b.ng", "email_consent": True}]}).status_code == 200
+        assert client.post("/v1/contacts/import", headers=auth(), json={"contacts": [{"email": "a@b.ng", "tenant_id": "x"}]}).status_code == 400
+        assert client.delete("/v1/contacts/not-an-id", headers=auth()).status_code in (400, 404, 422)
+        assert client.get("/v1/campaigns/c1/detail", headers=auth()).status_code == 200
+    assert {c[1] for c in campaigns.calls} == {"demo-tenant"}
+    client, campaigns = campaigns_client(reader)
+    with client:
+        assert client.get("/v1/contacts", headers=auth()).status_code == 403
+        assert client.get("/v1/campaigns/c1/detail", headers=auth()).status_code == 200  # readers may see the draft
+    assert [c[0] for c in campaigns.calls] == ["campaign"]

@@ -50,6 +50,7 @@ spec:
             # People management (Keycloak sign-ins) goes through svc-provisioning; optional, the API answers 503 without it.
             - name: PROVISIONING_URL
               valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: provisioning-url, optional: true}}
+            - {name: CAMPAIGNS_URL, value: http://svc-campaigns.core.svc.cluster.local}
           envFrom:
             - secretRef: {name: svc-orchestrator}
           readinessProbe:

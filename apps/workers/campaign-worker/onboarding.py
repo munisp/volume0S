@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-import httpx
 from temporalio import activity, workflow
+
+with workflow.unsafe.imports_passed_through():
+    import httpx
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 

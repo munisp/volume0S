@@ -21,6 +21,8 @@ class PeopleServiceError(Exception):
 
 
 class PeopleService:
+    name = "People service"
+
     def __init__(self, base_url: str, service_token: str):
         if not base_url or len(service_token) < 32:
             raise RuntimeError("PROVISIONING_URL and VOLUMEOS_SERVICE_TOKEN are required for people management")
@@ -41,23 +43,49 @@ class PeopleService:
     async def update(self, tenant_id: str, person_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("PATCH", f"/v1/people/{person_id}", tenant_id, payload)
 
-    async def _request(self, method: str, path: str, tenant_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _request(self, method: str, path: str, tenant_id: str, payload: dict[str, Any] | None = None,
+                       params: dict[str, Any] | None = None) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self.service_token}", "X-VolumeOS-Tenant": tenant_id, "Accept": "application/json"}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
-                response = await client.request(method, self.base_url + path, json=payload, headers=headers)
+                response = await client.request(method, self.base_url + path, json=payload, headers=headers, params=params)
         except httpx.HTTPError as exc:
-            raise PeopleServiceError("People service is unavailable.") from exc
+            raise PeopleServiceError(f"{self.name} is unavailable.") from exc
         try:
             result = response.json()
         except ValueError as exc:
-            raise PeopleServiceError("People service returned invalid JSON.", 502, "invalid_people_response") from exc
+            raise PeopleServiceError(f"{self.name} returned invalid JSON.", 502, "invalid_people_response") from exc
         if response.is_error:
             detail = result.get("error") if isinstance(result, dict) and isinstance(result.get("error"), dict) else {}
             # 503, not 502, for anything else: Cloudflare replaces a 502's body with its own page, losing the message.
             status = response.status_code if response.status_code in {400, 404, 409, 422} else 503
-            raise PeopleServiceError(str(detail.get("message") or "People service request failed."), status,
+            if response.status_code == 422 and isinstance(result, dict) and "detail" in result:
+                detail = {"message": "Check these fields: " + ", ".join(
+                    str(e.get("loc", ["", "?"])[-1]) for e in result["detail"] if isinstance(e, dict)), "code": "invalid_request"}
+            raise PeopleServiceError(str(detail.get("message") or f"{self.name} request failed."), status,
                                      str(detail.get("code") or "people_service_error"))
         if not isinstance(result, dict):
-            raise PeopleServiceError("People service returned a non-object response.", 502, "invalid_people_response")
+            raise PeopleServiceError(f"{self.name} returned a non-object response.", 502, "invalid_people_response")
         return result
+
+
+class CampaignsService(PeopleService):
+    """svc-campaigns: contact lists, campaign drafts and send results for the console."""
+    name = "Campaigns service"
+
+    @classmethod
+    def from_env(cls) -> "CampaignsService | None":
+        url = os.environ.get("CAMPAIGNS_URL", "")
+        return cls(url, os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")) if url else None
+
+    async def contacts(self, tenant_id: str, limit: int, offset: int) -> dict[str, Any]:
+        return await self._request("GET", "/v1/contacts", tenant_id, params={"limit": limit, "offset": offset})
+
+    async def import_contacts(self, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", "/v1/contacts/import", tenant_id, payload)
+
+    async def delete_contact(self, tenant_id: str, contact_id: str) -> dict[str, Any]:
+        return await self._request("DELETE", f"/v1/contacts/{contact_id}", tenant_id)
+
+    async def campaign(self, tenant_id: str, campaign_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/v1/campaigns/{campaign_id}", tenant_id)

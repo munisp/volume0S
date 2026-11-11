@@ -1,5 +1,6 @@
+import type { ContactInput } from './contacts'
 import type {
-  ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignSnapshot,
+  ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignContact, CampaignDraft, CampaignResult, CampaignSnapshot,
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace, TenantSummary, Person,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
@@ -106,6 +107,23 @@ export class VolumeOSApi {
 
   startCampaign(input: { campaign_id: string; brief: string; amount_minor: number; currency: string; cycle_id: string }) {
     return this.request<{ status: string; campaign_id: string }>(this.orchestratorUrl, '/v1/campaigns', { method: 'POST', body: input })
+  }
+
+  /** The AI draft a person approves, and the per-channel results once it was sent. */
+  campaignDetail(campaignId: string) {
+    return this.request<{ draft: CampaignDraft | null; results: CampaignResult[] }>(this.orchestratorUrl, `/v1/campaigns/${encodeURIComponent(campaignId)}/detail`)
+  }
+
+  contacts(limit = 50, offset = 0) {
+    return this.request<{ contacts: CampaignContact[]; total: number; reachable: { email?: number; whatsapp?: number } }>(this.orchestratorUrl, `/v1/contacts?limit=${limit}&offset=${offset}`)
+  }
+
+  importContacts(contacts: ContactInput[]) {
+    return this.request<{ added: number; updated: number }>(this.orchestratorUrl, '/v1/contacts/import', { method: 'POST', body: { contacts } })
+  }
+
+  deleteContact(id: string) {
+    return this.request<{ deleted: boolean }>(this.orchestratorUrl, `/v1/contacts/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
 
   approveCampaign(campaignId: string, approvalId: string) {

@@ -555,3 +555,6 @@ table.data tr.diag td { background: var(--panel-sunk); }
   .landing-close { margin: 56px 16px 0; flex-direction: column; align-items: flex-start; padding: 24px; }
   .landing-foot { flex-direction: column; padding: 32px 16px; }
 }
+
+.draft-preview { border: 1px solid var(--border, #e3e3e3); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.draft-preview p { margin: 0; }

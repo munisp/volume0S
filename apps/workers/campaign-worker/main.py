@@ -6,6 +6,7 @@ or settlement is simulated. Every request carries an idempotency key and tenant 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import os
 import re
@@ -13,14 +14,18 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-import httpx
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-import metrics
+# Temporal re-imports workflow modules in a sandbox; these are only used by activities and the worker process,
+# and httpx/prometheus can't be re-imported there ("Failed validating workflow CampaignWorkflow").
+with workflow.unsafe.imports_passed_through():
+    import httpx
+
+    import metrics
 from onboarding import (
     OnboardingWorkflow,
     activate_tenancy,
@@ -36,6 +41,9 @@ from onboarding import (
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?234|0)[789][01]\d{8}(?!\d)")
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
+
+
+DRAFT_TIMEOUT_SECONDS = 600.0
 
 
 def redact_pii(text: str) -> str:
@@ -107,14 +115,15 @@ def validate_campaign(value: CampaignInput) -> None:
         raise ApplicationError("campaign brief is required", non_retryable=True)
 
 
-async def call(service_env: str, path: str, tenant_id: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def call(service_env: str, path: str, tenant_id: str, key: str, payload: dict[str, Any],
+               timeout_seconds: float = 30.0) -> dict[str, Any]:
     base = os.environ.get(service_env, "").rstrip("/")
     if not base:
         raise ApplicationError(f"{service_env} is not configured", non_retryable=True)
     headers = {"Idempotency-Key": key, "X-VolumeOS-Tenant": tenant_id}
     if token := os.environ.get("VOLUMEOS_SERVICE_TOKEN", ""):
         headers["Authorization"] = f"Bearer {token}"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
         response = await client.post(base + path, json=payload, headers=headers)
         response.raise_for_status()
         result = response.json()
@@ -130,6 +139,8 @@ async def draft_campaign(value: CampaignInput) -> str:
         "AI_GATEWAY_URL", "/v1/drafts", value.tenant_id,
         f"campaign:{value.campaign_id}:draft",
         {"campaign_id": value.campaign_id, "brief": redact_pii(value.brief)},
+        # The draft is written by a CPU-only model shared with other apps: seconds when idle, minutes when busy.
+        timeout_seconds=DRAFT_TIMEOUT_SECONDS,
     )
     if not result.get("draft_id"):
         raise ApplicationError("AI gateway response is missing draft_id")
@@ -281,7 +292,10 @@ class CampaignWorkflow:
             "retry_policy": RetryPolicy(maximum_attempts=3),
         }
         try:
-            draft_id = await workflow.execute_activity(draft_campaign, value, **activity_options)
+            draft_id = await workflow.execute_activity(
+                draft_campaign, value, start_to_close_timeout=timedelta(seconds=DRAFT_TIMEOUT_SECONDS + 60),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
             self._transition("awaiting_approval")
             try:
                 await workflow.wait_condition(lambda: self._approval is not None, timeout=timedelta(hours=24))
@@ -343,6 +357,9 @@ async def main() -> None:
         client,
         task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "campaigns-v1"),
         workflows=[CampaignWorkflow, OnboardingWorkflow],
+        # record_campaign_approval and record_campaign_cycle are plain (sync) functions: Temporal refuses to start a
+        # worker with sync activities unless it is given a thread pool to run them in.
+        activity_executor=concurrent.futures.ThreadPoolExecutor(max_workers=4),
         activities=[
             draft_campaign, reserve_budget, dispatch_campaign, record_campaign_approval,
             record_campaign_cycle, settle_budget,

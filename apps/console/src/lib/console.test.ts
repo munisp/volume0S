@@ -164,3 +164,19 @@ test('a new client\'s id comes from its name and never collides', async () => {
   const next = freeId(long, new Set([long]))
   assert.ok(next.length <= 63 && next.endsWith('-2') && ID_PATTERN.test(next))
 })
+
+test('contacts CSV: headers, quotes, consent is never assumed', async () => {
+  const { parseContactsCsv, splitCsvLine } = await import('./contacts.ts')
+  assert.deepEqual(splitCsvLine('"Obi, Ada",ada@x.ng,"say ""hi"""'), ['Obi, Ada', 'ada@x.ng', 'say "hi"'])
+  const csv = 'First Name,Email,Phone\nAda Obi,ADA@x.ng,+2348031111111\n,,\nBo,,08031234567\n'
+  const withoutConsent = parseContactsCsv(csv, false)
+  assert.equal(withoutConsent.rows.length, 2)
+  assert.equal(withoutConsent.skipped, 1)
+  assert.deepEqual(withoutConsent.rows[0], { first_name: 'Ada', email: 'ada@x.ng', phone: '+2348031111111', email_consent: false, whatsapp_consent: false })
+  const confirmed = parseContactsCsv(csv, true)
+  assert.equal(confirmed.rows[1].whatsapp_consent, true)
+  assert.equal(confirmed.rows[1].email_consent, false) // no email, so no email consent
+  const columns = parseContactsCsv('email,email_consent\na@x.ng,yes\nb@x.ng,no\n', true)
+  assert.deepEqual(columns.rows.map(r => r.email_consent), [true, false]) // the file's own answer wins
+  assert.throws(() => parseContactsCsv('name,city\nAda,Lagos\n', true))
+})
