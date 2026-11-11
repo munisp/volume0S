@@ -41,6 +41,9 @@ spec:
             - {name: CAMPAIGN_FROM_ADDRESS, value: campaigns@upi.dev}
             - {name: PUBLIC_URL, value: https://volumeos.newfire.app}
             - {name: EMAIL_TEST_DOMAINS, value: ".test,example.com"}
+            # Postiz (social posting for Content Cadence); each business connects with its own Postiz API key.
+            - {name: POSTIZ_URL, value: http://postiz.core.svc.cluster.local}
+            - {name: POSTIZ_PUBLIC_URL, value: https://postiz.newfire.app}
           envFrom:
             # WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_CAMPAIGN_TEMPLATE(_LANGUAGE); optional: without
             # them WhatsApp contacts are simply not messaged.

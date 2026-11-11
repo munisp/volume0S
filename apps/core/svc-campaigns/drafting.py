@@ -17,10 +17,13 @@ SYSTEM = (
     "You write short win-back and follow-up marketing messages that a small business in Nigeria sends to its own "
     "customers. The business is the sender: never greet or address the business by name. Greet the customer only "
     "with {{first_name}} (e.g. 'Hi {{first_name}},'). "
-    "Answer only with JSON of this shape: {\"subject\": string, \"email_body\": string, \"whatsapp_text\": string}. "
+    "Answer only with JSON of this shape: {\"subject\": string, \"email_body\": string, \"whatsapp_text\": string, "
+    "\"social_post\": string}. "
     "subject: at most 70 characters, never addresses the customer by name. "
     "email_body: plain text, at most 120 words, may use {{first_name}} for the customer's first name, no links. "
     "whatsapp_text: at most 300 characters, may use {{first_name}}. "
+    "social_post: a public post for the business's social media, at most 260 characters, never uses {{first_name}}, "
+    "may end with up to two relevant hashtags. "
     "Use only facts, prices, discounts and codes that are in the brief; never invent offers. Warm, clear, not pushy. "
     "The brief may contain placeholders like [redacted-phone] or [redacted-email]: never copy them into the messages."
 )
@@ -79,6 +82,8 @@ def clean_draft(content: object) -> dict[str, str]:
             raise DraftingError(f"the draft is missing its {field.replace('_', ' ')}")
         value = drop_redacted(PLACEHOLDER.sub("{{first_name}}", value.strip()))
         out[field] = value[:limit]
+    social = content.get("social_post")
+    out["social_text"] = personalise(drop_redacted(social.strip()), "")[:280] if isinstance(social, str) and social.strip() else ""
     out["subject"] = personalise(out["subject"], "").strip(" ,!-") or "A note from us"
     return out
 

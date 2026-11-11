@@ -18,8 +18,10 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from channels import (ChannelError, EmailMessage, ResendEmail, Services, WhatsAppTemplate, is_test_address,
-                      is_test_phone, read_unsubscribe_token, unsubscribe_token)
+from datetime import datetime, timezone
+
+from channels import (ChannelError, EmailMessage, Postiz, ResendEmail, Services, WhatsAppTemplate, is_test_address,
+                      is_test_phone, read_unsubscribe_token, seal, unseal, unsubscribe_token)
 from drafting import DraftingError, OllamaDrafter, personalise
 from store import PostgresCampaignStore
 
@@ -27,6 +29,7 @@ SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE = re.compile(r"^\+[1-9]\d{7,14}$")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://volumeos.newfire.app").rstrip("/")
+POSTIZ_PUBLIC_URL = os.environ.get("POSTIZ_PUBLIC_URL", "").rstrip("/")  # where people open Postiz to connect accounts
 
 
 class InputModel(BaseModel):
@@ -87,6 +90,10 @@ class ContactImport(InputModel):
     contacts: list[Contact] = Field(min_length=1, max_length=5000)
 
 
+class SocialConnect(InputModel):
+    api_key: str = Field(min_length=10, max_length=500, pattern=r"^[A-Za-z0-9._~+/=-]+$")
+
+
 class DunningNudge(InputModel):
     channel: Literal["email", "sms", "whatsapp"]
     subscription_id: str = Field(pattern=SAFE_ID.pattern)
@@ -100,7 +107,8 @@ def error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"code": code, "message": message}})
 
 
-def create_app(store: Any = None, drafter: Any = None, email: Any = None, whatsapp: Any = None, services: Any = None) -> FastAPI:
+def create_app(store: Any = None, drafter: Any = None, email: Any = None, whatsapp: Any = None, services: Any = None,
+               postiz: Any = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app.state.store is None:
@@ -113,13 +121,15 @@ def create_app(store: Any = None, drafter: Any = None, email: Any = None, whatsa
             app.state.whatsapp = WhatsAppTemplate.from_env()
         if app.state.services is None:
             app.state.services = Services.from_env()
+        if app.state.postiz is None:
+            app.state.postiz = Postiz.from_env()
         yield
         if hasattr(app.state.store, "close"):
             await app.state.store.close()
 
     app = FastAPI(title="VolumeOS campaigns", lifespan=lifespan)
     app.state.store, app.state.drafter, app.state.email = store, drafter, email
-    app.state.whatsapp, app.state.services = whatsapp, services
+    app.state.whatsapp, app.state.services, app.state.postiz = whatsapp, services, postiz
     token = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
 
     def caller(request: Request) -> str | JSONResponse:
@@ -140,7 +150,50 @@ def create_app(store: Any = None, drafter: Any = None, email: Any = None, whatsa
     async def ready():
         await app.state.store.ready()
         return {"status": "ready", "drafting": app.state.drafter is not None, "email": app.state.email is not None,
-                "whatsapp": app.state.whatsapp is not None}
+                "whatsapp": app.state.whatsapp is not None, "social": app.state.postiz is not None}
+
+    # Social accounts (Postiz) ---------------------------------------------------------------------------------
+    async def social_accounts(tenant: str) -> tuple[str | None, list[dict]]:
+        sealed = await app.state.store.social_key(tenant)
+        if not sealed or app.state.postiz is None:
+            return None, []
+        key = unseal(sealed)
+        return key, await app.state.postiz.integrations(key)
+
+    @app.get("/v1/social")
+    async def social(request: Request):
+        tenant = caller(request)
+        if isinstance(tenant, JSONResponse):
+            return tenant
+        if app.state.postiz is None:
+            return {"available": False, "connected": False, "accounts": []}
+        try:
+            key, accounts = await social_accounts(tenant)
+        except ChannelError as exc:
+            return {"available": True, "connected": True, "accounts": [], "problem": str(exc), "postiz_url": POSTIZ_PUBLIC_URL or app.state.postiz.base}
+        return {"available": True, "connected": key is not None, "accounts": accounts, "postiz_url": POSTIZ_PUBLIC_URL or app.state.postiz.base}
+
+    @app.put("/v1/social")
+    async def connect_social(body: SocialConnect, request: Request):
+        tenant = caller(request)
+        if isinstance(tenant, JSONResponse):
+            return tenant
+        if app.state.postiz is None:
+            return error(503, "social_not_configured", "social posting isn't set up on this deployment")
+        try:
+            accounts = await app.state.postiz.integrations(body.api_key)  # refuse a key Postiz doesn't accept
+        except ChannelError as exc:
+            return error(400, "invalid_postiz_key", str(exc))
+        await app.state.store.save_social_key(tenant, seal(body.api_key))
+        return {"connected": True, "accounts": accounts}
+
+    @app.delete("/v1/social")
+    async def disconnect_social(request: Request):
+        tenant = caller(request)
+        if isinstance(tenant, JSONResponse):
+            return tenant
+        await app.state.store.delete_social_key(tenant)
+        return {"connected": False}
 
     # Drafts ---------------------------------------------------------------------------------------------------
     @app.post("/v1/drafts")
@@ -222,8 +275,14 @@ def create_app(store: Any = None, drafter: Any = None, email: Any = None, whatsa
         if finished:
             return finished
         audience = await store.audience(tenant)
-        if not audience:
-            return error(409, "no_audience", "this business has no contacts who agreed to hear from it; import contacts first")
+        try:
+            social_key, social_accounts_list = await social_accounts(tenant)
+        except ChannelError:
+            social_key, social_accounts_list = None, []
+        live_accounts = [a for a in social_accounts_list if not a["disabled"]] if draft.get("social_text") else []
+        if not audience and not live_accounts:
+            return error(409, "no_audience", "this business has no contacts who agreed to hear from it and no connected social "
+                         "accounts; import contacts or connect social accounts first")
         details = await app.state.services.business(tenant)
         business = str(details.get("name", ""))
         # Checked once up front so the reason is plain; svc-tenancy still decides every single send below.
@@ -272,6 +331,21 @@ def create_app(store: Any = None, drafter: Any = None, email: Any = None, whatsa
                         return "test_address", "", "test number: not messaged"
                     return "sent", await app.state.whatsapp.send(c["phone"], personalise(draft["whatsapp_text"], c["first_name"])), ""
                 await attempt(contact, "whatsapp", contact["phone"], send_whatsapp)
+
+        if live_accounts and social_key:
+            posted = await store.social_posted(tenant, dispatch_id)
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            for account in live_accounts:
+                status = posted.get(account["id"])
+                if status != "sent":
+                    try:
+                        provider = await app.state.postiz.post_now(social_key, account, draft["social_text"], now)
+                        status, detail = "sent", ""
+                    except ChannelError as exc:
+                        status, provider, detail = "failed", "", str(exc)
+                    await store.record_social_post(tenant, dispatch_id, account["id"], account["network"], status, provider, detail)
+                bucket = counts.setdefault("social", {"success": 0, "failure": 0})
+                bucket["success" if status == "sent" else "failure"] += 1
 
         channels = [{"channel": ch, **n} for ch, n in sorted(counts.items()) if n["success"] + n["failure"] > 0]
         if not channels:

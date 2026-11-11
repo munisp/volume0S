@@ -79,6 +79,23 @@ class FakeStore:
     async def dispatch_summary(self, tenant, campaign_id):
         return []
 
+    async def save_social_key(self, tenant, sealed):
+        self.social = getattr(self, "social", {}); self.social[tenant] = sealed
+
+    async def social_key(self, tenant):
+        return getattr(self, "social", {}).get(tenant)
+
+    async def delete_social_key(self, tenant):
+        getattr(self, "social", {}).pop(tenant, None)
+
+    async def social_posted(self, tenant, dispatch_id):
+        return {i: st for (t, d, i), st in getattr(self, "posts", {}).items() if t == tenant and d == dispatch_id}
+
+    async def record_social_post(self, tenant, dispatch_id, integration_id, network, status, provider_id="", detail=""):
+        self.posts = getattr(self, "posts", {}); key = (tenant, dispatch_id, integration_id)
+        if self.posts.get(key) in (None, "failed"):
+            self.posts[key] = status
+
     async def nudge_sent(self, tenant, nudge_id):
         return (tenant, nudge_id) in self.nudges
 
@@ -97,7 +114,8 @@ class FakeDrafter:
         self.calls += 1
         if "fail" in brief:
             raise DraftingError("the drafting model is unavailable")
-        return {"subject": f"We miss you at {business}", "email_body": "Hi {{first_name}}, come back!", "whatsapp_text": "Hi {{first_name}}!"}
+        return {"subject": f"We miss you at {business}", "email_body": "Hi {{first_name}}, come back!", "whatsapp_text": "Hi {{first_name}}!",
+                "social_text": "Jollof Fridays are back #Lagos"}
 
 
 class FakeEmail:
@@ -141,8 +159,28 @@ class FakeServices:
         return self.owners
 
 
+class FakePostiz:
+    base = "https://postiz.example"
+
+    def __init__(self, fail_for=()):
+        self.posts, self.fail_for = [], set(fail_for)
+
+    async def integrations(self, api_key):
+        if api_key != "good-postiz-key-123":
+            raise ChannelError("Postiz didn't accept that API key")
+        return [{"id": "bsky-1", "name": "Acme", "network": "bluesky", "picture": "", "disabled": False},
+                {"id": "tg-1", "name": "Acme TG", "network": "telegram", "picture": "", "disabled": False},
+                {"id": "x-old", "name": "Old", "network": "x", "picture": "", "disabled": True}]
+
+    async def post_now(self, api_key, integration, content, when):
+        if integration["id"] in self.fail_for:
+            raise ChannelError("Postiz returned 500")
+        self.posts.append((integration["id"], content)); return f"post-{len(self.posts)}"
+
+
 def app(**kw):
-    parts = {"store": FakeStore(), "drafter": FakeDrafter(), "email": FakeEmail(), "whatsapp": FakeWhatsApp(), "services": FakeServices()}
+    parts = {"store": FakeStore(), "drafter": FakeDrafter(), "email": FakeEmail(), "whatsapp": FakeWhatsApp(), "services": FakeServices(),
+             "postiz": FakePostiz()}
     parts.update(kw)
     return TestClient(create_app(**parts)), parts
 
@@ -291,3 +329,36 @@ def test_redaction_placeholders_never_reach_customers():
     assert "[redacted" not in json.dumps(draft)
     assert draft["email_body"] == "Hi {{first_name}}, 10% off this weekend!\nSee you soon."
     assert draft["whatsapp_text"] == "Code BACK10 works all weekend."
+
+
+def test_social_key_is_checked_sealed_and_never_returned():
+    client, parts = app()
+    with client:
+        assert client.put("/v1/social", headers=biz(), json={"api_key": "wrong-key-0000"}).status_code == 400
+        ok = client.put("/v1/social", headers=biz(), json={"api_key": "good-postiz-key-123"})
+        assert ok.status_code == 200 and [a["network"] for a in ok.json()["accounts"]] == ["bluesky", "telegram", "x"]
+        assert b"good-postiz-key-123" not in parts["store"].social["acme"]  # stored encrypted
+        listed = client.get("/v1/social", headers=biz()).json()
+        assert listed["connected"] and "good-postiz-key-123" not in json.dumps(listed)
+        assert client.get("/v1/social", headers=biz("other")).json()["connected"] is False
+
+
+def test_a_social_only_business_can_run_a_campaign_and_posts_once_per_live_account():
+    client, parts = app()
+    with client:
+        client.put("/v1/social", headers=biz(), json={"api_key": "good-postiz-key-123"})
+        body = start_campaign(client)
+        first = client.post("/v1/dispatches", headers=biz(), json=body).json()
+        again = client.post("/v1/dispatches", headers=biz(), json=body).json()
+        assert first["channels"] == [{"channel": "social", "success": 2, "failure": 0}] and first == again
+        assert parts["postiz"].posts == [("bsky-1", "Jollof Fridays are back #Lagos"), ("tg-1", "Jollof Fridays are back #Lagos")]
+
+
+def test_a_failed_social_post_is_counted_and_retried_alone():
+    postiz = FakePostiz(fail_for={"tg-1"})
+    client, parts = app(postiz=postiz)
+    with client:
+        client.put("/v1/social", headers=biz(), json={"api_key": "good-postiz-key-123"})
+        body = start_campaign(client)
+        result = client.post("/v1/dispatches", headers=biz(), json=body).json()
+        assert result["channels"] == [{"channel": "social", "success": 1, "failure": 1}]

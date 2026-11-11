@@ -198,3 +198,60 @@ class Services:
             response = await client.get(self.provisioning_url + "/v1/people", headers=self._headers(tenant_id))
         response.raise_for_status()
         return [p for p in response.json().get("people", []) if p.get("enabled") and "client-owner" in (p.get("roles") or [])]
+
+
+# Social (Postiz) ------------------------------------------------------------------------------------------------
+def _social_key() -> bytes:
+    secret = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
+    return hmac.new(secret.encode(), b"volumeos.campaigns.social-key", hashlib.sha256).digest()
+
+
+def seal(plaintext: str) -> bytes:
+    """AES-GCM with a fresh nonce; the stored value is nonce || ciphertext. Postiz API keys are never stored plain."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce = os.urandom(12)
+    return nonce + AESGCM(_social_key()).encrypt(nonce, plaintext.encode(), b"postiz-api-key")
+
+
+def unseal(sealed: bytes) -> str:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    return AESGCM(_social_key()).decrypt(bytes(sealed[:12]), bytes(sealed[12:]), b"postiz-api-key").decode()
+
+
+class Postiz:
+    """Postiz's public API, one business's API key per call (each business is its own Postiz organisation)."""
+
+    def __init__(self, base_url: str):
+        self.base = base_url.rstrip("/")
+
+    @classmethod
+    def from_env(cls) -> "Postiz | None":
+        url = os.environ.get("POSTIZ_URL", "").strip()
+        return cls(url) if url else None
+
+    async def _call(self, method: str, path: str, api_key: str, **kwargs) -> httpx.Response:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.request(method, f"{self.base}/api/public/v1{path}",
+                                                headers={"Authorization": api_key}, **kwargs)
+        except httpx.HTTPError as exc:
+            raise ChannelError(f"Postiz unreachable: {exc}") from exc
+        if response.status_code in (401, 403):
+            raise ChannelError("Postiz didn't accept that API key")
+        if response.status_code // 100 != 2:
+            raise ChannelError(f"Postiz returned {response.status_code}: {response.text[:200]}")
+        return response
+
+    async def integrations(self, api_key: str) -> list[dict]:
+        rows = (await self._call("GET", "/integrations", api_key)).json()
+        return [{"id": str(r.get("id", "")), "name": str(r.get("name", "")), "network": str(r.get("identifier", "")),
+                 "picture": r.get("picture") or "", "disabled": bool(r.get("disabled"))} for r in rows if isinstance(r, dict)]
+
+    async def post_now(self, api_key: str, integration: dict, content: str, when_iso: str) -> str:
+        body = {"type": "now", "shortLink": False, "date": when_iso, "tags": [],
+                "posts": [{"integration": {"id": integration["id"]}, "value": [{"content": content, "image": []}],
+                           "settings": {"__type": integration["network"]}}]}
+        result = (await self._call("POST", "/posts", api_key, json=body)).json()
+        first = result[0] if isinstance(result, list) and result else result
+        post_id = str((first or {}).get("postId") or (first or {}).get("id") or "") if isinstance(first, dict) else ""
+        return post_id or "accepted"

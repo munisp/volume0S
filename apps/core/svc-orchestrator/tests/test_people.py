@@ -125,6 +125,15 @@ class FakeCampaigns:
         self.calls.append(("campaign", tenant_id, campaign_id))
         return {"draft": None, "results": []}
 
+    async def social(self, tenant_id):
+        self.calls.append(("social", tenant_id)); return {"connected": False, "accounts": []}
+
+    async def connect_social(self, tenant_id, api_key):
+        self.calls.append(("connect", tenant_id, api_key)); return {"connected": True, "accounts": []}
+
+    async def disconnect_social(self, tenant_id):
+        self.calls.append(("disconnect", tenant_id)); return {"connected": False}
+
 
 def campaigns_client(claims: Claims):
     campaigns = FakeCampaigns()
@@ -148,3 +157,19 @@ def test_contacts_are_for_the_roles_that_run_campaigns_and_scoped_to_the_busines
         assert client.get("/v1/contacts", headers=auth()).status_code == 403
         assert client.get("/v1/campaigns/c1/detail", headers=auth()).status_code == 200  # readers may see the draft
     assert [c[0] for c in campaigns.calls] == ["campaign"]
+
+
+
+def test_social_accounts_readable_by_readers_connected_by_delivery():
+    reader = Claims("demo-tenant", "r", frozenset({"reader"}))
+    delivery = Claims("demo-tenant", "d", frozenset({"delivery"}))
+    client, campaigns = campaigns_client(reader)
+    with client:
+        assert client.get("/v1/social", headers=auth()).status_code == 200
+        assert client.put("/v1/social", headers=auth(), json={"api_key": "postiz-key-123456"}).status_code == 403
+    client, campaigns = campaigns_client(delivery)
+    with client:
+        assert client.put("/v1/social", headers=auth(), json={"api_key": "postiz-key-123456"}).status_code == 200
+        assert client.put("/v1/social", headers=auth(), json={"api_key": "bad key with spaces"}).status_code == 400
+        assert client.delete("/v1/social", headers=auth()).status_code == 200
+    assert campaigns.calls == [("connect", "demo-tenant", "postiz-key-123456"), ("disconnect", "demo-tenant")]

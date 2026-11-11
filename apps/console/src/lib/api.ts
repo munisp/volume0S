@@ -1,6 +1,6 @@
 import type { ContactInput } from './contacts'
 import type {
-  ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignContact, CampaignDraft, CampaignResult, CampaignSnapshot,
+  ArAgingReport, Balance, BillingCycleSnapshot, BillingDocument, Bundle, CampaignContact, CampaignDraft, CampaignResult, CampaignSnapshot, SocialAccount, SocialStatus,
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace, TenantSummary, Person,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
@@ -112,6 +112,18 @@ export class VolumeOSApi {
   /** The AI draft a person approves, and the per-channel results once it was sent. */
   campaignDetail(campaignId: string) {
     return this.request<{ draft: CampaignDraft | null; results: CampaignResult[] }>(this.orchestratorUrl, `/v1/campaigns/${encodeURIComponent(campaignId)}/detail`)
+  }
+
+  social() {
+    return this.request<SocialStatus>(this.orchestratorUrl, '/v1/social')
+  }
+
+  connectSocial(apiKey: string) {
+    return this.request<{ connected: boolean; accounts: SocialAccount[] }>(this.orchestratorUrl, '/v1/social', { method: 'PUT', body: { api_key: apiKey } })
+  }
+
+  disconnectSocial() {
+    return this.request<{ connected: boolean }>(this.orchestratorUrl, '/v1/social', { method: 'DELETE' })
   }
 
   contacts(limit = 50, offset = 0) {

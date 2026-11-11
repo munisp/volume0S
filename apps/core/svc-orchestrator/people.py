@@ -87,5 +87,14 @@ class CampaignsService(PeopleService):
     async def delete_contact(self, tenant_id: str, contact_id: str) -> dict[str, Any]:
         return await self._request("DELETE", f"/v1/contacts/{contact_id}", tenant_id)
 
+    async def social(self, tenant_id: str) -> dict[str, Any]:
+        return await self._request("GET", "/v1/social", tenant_id)
+
+    async def connect_social(self, tenant_id: str, api_key: str) -> dict[str, Any]:
+        return await self._request("PUT", "/v1/social", tenant_id, {"api_key": api_key})
+
+    async def disconnect_social(self, tenant_id: str) -> dict[str, Any]:
+        return await self._request("DELETE", "/v1/social", tenant_id)
+
     async def campaign(self, tenant_id: str, campaign_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/campaigns/{campaign_id}", tenant_id)

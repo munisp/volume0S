@@ -79,6 +79,10 @@ class ContactImport(InputModel):
     contacts: list[ContactRow] = Field(min_length=1, max_length=5000)
 
 
+class SocialConnect(InputModel):
+    api_key: str = Field(min_length=10, max_length=500, pattern=r"^[A-Za-z0-9._~+/=-]+$")
+
+
 class CampaignApproval(InputModel):
     approval_id: str = Field(min_length=1, max_length=128)
 
@@ -447,6 +451,19 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     @app.delete("/v1/contacts/{contact_id}")
     async def delete_contact(contact_id: Annotated[str, Path(pattern=r"^[a-f0-9-]{36}$")], claims: Claims = Depends(need("delivery"))):
         return await campaigns_service().delete_contact(claims.tenant_id, contact_id)
+
+    @app.get("/v1/social")
+    async def social(claims: Claims = Depends(need("reader"))):
+        """The business's connected social accounts (Postiz), for Content Cadence."""
+        return await campaigns_service().social(claims.tenant_id)
+
+    @app.put("/v1/social")
+    async def connect_social(body: SocialConnect, claims: Claims = Depends(need("delivery"))):
+        return await campaigns_service().connect_social(claims.tenant_id, body.api_key)
+
+    @app.delete("/v1/social")
+    async def disconnect_social(claims: Claims = Depends(need("delivery"))):
+        return await campaigns_service().disconnect_social(claims.tenant_id)
 
     @app.get("/v1/studio/packs")
     async def studio_packs(claims: Claims = Depends(need("reader"))):

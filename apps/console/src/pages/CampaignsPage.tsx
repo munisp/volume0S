@@ -7,7 +7,7 @@ import { allowed } from '../lib/access'
 import { byRecent } from '../lib/workflows'
 import { Confirm, Empty, Field, Modal, Note, PageHead, RoleNote, StageSteps, Submit, When, WorkStatus } from '../components/ui'
 import { dateTime, money } from '../lib/format'
-import { CampaignDraftPanel, ContactsPanel } from '../sections/CampaignContent'
+import { CampaignDraftPanel, ContactsPanel, SocialPanel } from '../sections/CampaignContent'
 
 const ID_PATTERN = '[a-zA-Z0-9][a-zA-Z0-9._:\\-]{0,127}'
 
@@ -92,6 +92,7 @@ export function CampaignsPage() {
       </section> : <section className="review-panel"><Empty title="Select a campaign" /></section>}
     </div>
     <ContactsPanel />
+    <SocialPanel />
 
     {modal && <Modal title="New campaign" description="Starts a draft that waits for approval. Nothing is reserved or sent until a person approves it." onClose={() => setModal(false)} wide>
       <form onSubmit={start} className="form-stack">

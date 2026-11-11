@@ -3,7 +3,7 @@ import { Trash2, Upload } from 'lucide-react'
 import { useSession, errorText } from '../state/session-context'
 import { allowed } from '../lib/access'
 import { parseContactsCsv, type ParsedContacts } from '../lib/contacts'
-import type { CampaignContact, CampaignDraft, CampaignResult } from '../lib/types'
+import type { CampaignContact, CampaignDraft, CampaignResult, SocialStatus } from '../lib/types'
 import { Confirm, Empty, Note, Panel, RoleNote } from '../components/ui'
 
 const STATUS_LABEL: Record<CampaignResult['status'], string> = {
@@ -48,6 +48,10 @@ export function CampaignDraftPanel({ campaignId, status }: { campaignId: string;
       <span className="eyebrow">WhatsApp</span>
       <p style={{ whiteSpace: 'pre-wrap' }}>{draft.whatsapp_text}</p>
     </div>
+    {draft.social_text && <div className="draft-preview">
+      <span className="eyebrow">Social post (connected accounts)</span>
+      <p style={{ whiteSpace: 'pre-wrap' }}>{draft.social_text}</p>
+    </div>}
     <p className="small muted">{'{{first_name}}'} becomes each customer's first name. Written by {draft.model} on VolumeOS's own servers; customer details are never sent to it.</p>
     {results.length > 0 && <table className="data"><thead><tr><th>Channel</th><th>Result</th><th className="right">People</th></tr></thead><tbody>
       {results.map(row => <tr key={`${row.cycle_id}-${row.channel}-${row.status}`}><td style={{ textTransform: 'capitalize' }}>{row.channel}</td><td>{STATUS_LABEL[row.status]}</td><td className="right">{row.count}</td></tr>)}
@@ -134,5 +138,62 @@ export function ContactsPanel() {
     {removing && <Confirm title={`Remove ${removing.email ?? removing.phone}?`} confirmLabel="Remove contact" danger busy={busy} onCancel={() => setRemoving(null)} onConfirm={() => void remove(removing)}>
       <p>They won't get future campaigns. To stop someone ever being messaged again, add them to the suppression list instead.</p>
     </Confirm>}
+  </Panel>
+}
+
+const NETWORK_LABEL: Record<string, string> = {
+  bluesky: 'Bluesky', telegram: 'Telegram', facebook: 'Facebook Page', 'instagram-standalone': 'Instagram', instagram: 'Instagram',
+  x: 'X', linkedin: 'LinkedIn', 'linkedin-page': 'LinkedIn Page', threads: 'Threads', tiktok: 'TikTok',
+}
+
+/** Offer 02 Content Cadence: the business's social accounts, connected in Postiz; approved campaigns also post there. */
+export function SocialPanel() {
+  const { api, roles, notify } = useSession()
+  const [status, setStatus] = useState<SocialStatus | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+  const [version, setVersion] = useState(0)
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const canManage = allowed(roles, 'manageContacts')
+
+  useEffect(() => {
+    let active = true
+    api.social().then(result => { if (active) { setStatus(result); setFailure(null) } }, error => { if (active) setFailure(errorText(error)) })
+    return () => { active = false }
+  }, [api, version])
+
+  async function connect() {
+    setBusy(true)
+    try {
+      const result = await api.connectSocial(key.trim())
+      notify('success', `Connected: ${result.accounts.length} social account${result.accounts.length === 1 ? '' : 's'} found.`)
+      setKey(''); setVersion(current => current + 1)
+    } catch (error) { notify('error', errorText(error)) } finally { setBusy(false) }
+  }
+
+  async function disconnect() {
+    setBusy(true)
+    try { await api.disconnectSocial(); setVersion(current => current + 1) }
+    catch (error) { notify('error', errorText(error)) } finally { setBusy(false) }
+  }
+
+  const live = status?.accounts.filter(account => !account.disabled) ?? []
+  return <Panel title="Social accounts" meta={status?.connected ? `${live.length} connected` : undefined}>
+    <div className="panel-body stack">
+      {failure && <Note tone="failed">Social accounts couldn't be loaded: {failure}</Note>}
+      {status && !status.available && <Note>Social posting isn't set up on this deployment.</Note>}
+      {status?.problem && <Note tone="failed">{status.problem}</Note>}
+      {status?.available && <p className="body-copy">Approved campaigns also post their social text to these accounts.
+        Accounts are connected in <a href={status.postiz_url} target="_blank" rel="noreferrer">Postiz</a> (Bluesky and Telegram work today; Facebook and Instagram once the Meta app is set up).</p>}
+      {live.length > 0 && <ul className="plain-list">{live.map(account => <li key={account.id}><strong>{NETWORK_LABEL[account.network] ?? account.network}</strong> · {account.name}</li>)}</ul>}
+      {status?.connected && live.length === 0 && !status.problem && <Note tone="attention">Postiz is linked, but no social account is connected there yet.</Note>}
+      {status?.available && canManage && (status.connected
+        ? <div><button className="button button-danger-quiet small" onClick={() => void disconnect()} disabled={busy}>Unlink Postiz</button></div>
+        : <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <input aria-label="Postiz API key" type="password" placeholder="Postiz API key (Settings › Agents / Dev)" value={key} onChange={event => setKey(event.target.value)} style={{ minWidth: 280, flex: 1 }} />
+            <button className="button button-primary small" onClick={() => void connect()} disabled={busy || key.trim().length < 10}>Link Postiz</button>
+          </div>)}
+      {status?.available && !canManage && <RoleNote action="manageContacts" />}
+    </div>
   </Panel>
 }

@@ -41,6 +41,16 @@ async def test_store_round_trip_and_isolation():
         assert await store.dispatch_summary("a", "c1") == [{"cycle_id": "cy", "channel": "email", "status": "sent", "count": 1}]
         assert await store.delete_contact("b", contact) is False and await store.delete_contact("a", contact) is True
 
+        await store.save_social_key("a", b"\x01sealed")
+        await store.save_social_key("a", b"\x02sealed")  # reconnecting replaces the key
+        assert await store.social_key("a") == b"\x02sealed" and await store.social_key("b") is None
+        await store.record_social_post("a", "dispatch:x", "bsky-1", "bluesky", "failed", detail="boom")
+        await store.record_social_post("a", "dispatch:x", "bsky-1", "bluesky", "sent", "p1")
+        assert await store.social_posted("a", "dispatch:x") == {"bsky-1": "sent"}
+        assert {"cycle_id": "cy", "channel": "social", "status": "sent", "count": 1} in await store.dispatch_summary("a", "c1")
+        await store.delete_social_key("a")
+        assert await store.social_key("a") is None
+
         # The database itself refuses another business's rows, even to a query that forgets its tenant filter.
         connection = await asyncpg.connect(URL)
         try:

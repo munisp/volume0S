@@ -89,6 +89,40 @@ END $$;
 """),
 ]
 
+SCHEMA.append(("002_social", """
+ALTER TABLE campaign_drafts ADD COLUMN IF NOT EXISTS social_text text NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS campaign_social (
+    tenant_id text PRIMARY KEY,
+    api_key_sealed bytea NOT NULL,          -- AES-GCM (nonce || ciphertext); key derived from the service token
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS campaign_social_posts (
+    tenant_id text NOT NULL,
+    dispatch_id text NOT NULL,
+    integration_id text NOT NULL,
+    network text NOT NULL,
+    status text NOT NULL CHECK (status IN ('sent','failed')),
+    provider_id text NOT NULL DEFAULT '',
+    detail text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, dispatch_id, integration_id)
+);
+
+DO $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['campaign_social','campaign_social_posts'] LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+        EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+        EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
+        EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (tenant_id = current_setting(''volumeos.tenant_id'', true)) '
+                       'WITH CHECK (tenant_id = current_setting(''volumeos.tenant_id'', true))', t);
+    END LOOP;
+END $$;
+"""))
+
 CONTACT_COLUMNS = "id,tenant_id,first_name,email,phone,email_consent,whatsapp_consent,source,created_at,updated_at"
 
 
@@ -104,6 +138,7 @@ def draft_row(row: asyncpg.Record) -> dict[str, Any]:
     return {
         "draft_id": row["id"], "campaign_id": row["campaign_id"], "subject": row["subject"],
         "email_body": row["email_body"], "whatsapp_text": row["whatsapp_text"], "model": row["model"],
+        "social_text": row["social_text"] if "social_text" in row.keys() else "",
         "created_at": row["created_at"].isoformat(),
     }
 
@@ -219,10 +254,10 @@ class PostgresCampaignStore:
     async def save_draft(self, tenant_id: str, draft: dict[str, Any]) -> dict[str, Any]:
         async with self.tenant_tx(tenant_id) as connection:
             await connection.execute(
-                "INSERT INTO campaign_drafts (id,tenant_id,campaign_id,subject,email_body,whatsapp_text,model) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (tenant_id, campaign_id) DO NOTHING",
+                "INSERT INTO campaign_drafts (id,tenant_id,campaign_id,subject,email_body,whatsapp_text,model,social_text) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant_id, campaign_id) DO NOTHING",
                 draft["draft_id"], tenant_id, draft["campaign_id"], draft["subject"], draft["email_body"],
-                draft["whatsapp_text"], draft["model"])
+                draft["whatsapp_text"], draft["model"], draft.get("social_text", ""))
             row = await connection.fetchrow(
                 "SELECT * FROM campaign_drafts WHERE tenant_id=$1 AND campaign_id=$2", tenant_id, draft["campaign_id"])
         return draft_row(row)
@@ -268,8 +303,43 @@ class PostgresCampaignStore:
             rows = await connection.fetch(
                 "SELECT d.cycle_id, s.channel, s.status, count(*) AS n FROM campaign_dispatches d "
                 "JOIN campaign_sends s ON s.tenant_id=d.tenant_id AND s.dispatch_id=d.id "
+                "WHERE d.tenant_id=$1 AND d.campaign_id=$2 GROUP BY 1,2,3 "
+                "UNION ALL SELECT d.cycle_id, 'social', p.status, count(*) FROM campaign_dispatches d "
+                "JOIN campaign_social_posts p ON p.tenant_id=d.tenant_id AND p.dispatch_id=d.id "
                 "WHERE d.tenant_id=$1 AND d.campaign_id=$2 GROUP BY 1,2,3 ORDER BY 1,2,3", tenant_id, campaign_id)
         return [{"cycle_id": r["cycle_id"], "channel": r["channel"], "status": r["status"], "count": r["n"]} for r in rows]
+
+    # Social (Postiz) ----------------------------------------------------------------------------------------
+    async def save_social_key(self, tenant_id: str, sealed: bytes) -> None:
+        async with self.tenant_tx(tenant_id) as connection:
+            await connection.execute(
+                "INSERT INTO campaign_social (tenant_id, api_key_sealed) VALUES ($1,$2) "
+                "ON CONFLICT (tenant_id) DO UPDATE SET api_key_sealed=EXCLUDED.api_key_sealed, updated_at=now()",
+                tenant_id, sealed)
+
+    async def social_key(self, tenant_id: str) -> bytes | None:
+        async with self.tenant_tx(tenant_id) as connection:
+            return await connection.fetchval("SELECT api_key_sealed FROM campaign_social WHERE tenant_id=$1", tenant_id)
+
+    async def delete_social_key(self, tenant_id: str) -> None:
+        async with self.tenant_tx(tenant_id) as connection:
+            await connection.execute("DELETE FROM campaign_social WHERE tenant_id=$1", tenant_id)
+
+    async def social_posted(self, tenant_id: str, dispatch_id: str) -> dict[str, str]:
+        async with self.tenant_tx(tenant_id) as connection:
+            rows = await connection.fetch(
+                "SELECT integration_id, status FROM campaign_social_posts WHERE tenant_id=$1 AND dispatch_id=$2", tenant_id, dispatch_id)
+        return {r["integration_id"]: r["status"] for r in rows}
+
+    async def record_social_post(self, tenant_id: str, dispatch_id: str, integration_id: str, network: str, status: str,
+                                 provider_id: str = "", detail: str = "") -> None:
+        async with self.tenant_tx(tenant_id) as connection:
+            await connection.execute(
+                "INSERT INTO campaign_social_posts (tenant_id,dispatch_id,integration_id,network,status,provider_id,detail) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (tenant_id,dispatch_id,integration_id) DO UPDATE "
+                "SET status=EXCLUDED.status, provider_id=EXCLUDED.provider_id, detail=EXCLUDED.detail "
+                "WHERE campaign_social_posts.status='failed'",
+                tenant_id, dispatch_id, integration_id, network, status, provider_id, detail[:300])
 
     async def record_nudge(self, tenant_id: str, nudge_id: str, channel: str, recipients: int) -> bool:
         async with self.tenant_tx(tenant_id) as connection:
