@@ -110,7 +110,7 @@ def normalize_phone(value: str) -> str:
 
 
 class CensusSync:
-    def __init__(self, store: CensusStore, sink: CensusSink, masking_key: bytes, topic: str = "census.pings"):
+    def __init__(self, store: CensusStore, sink: CensusSink, masking_key: bytes, topic: str = "census-pings"):
         if len(masking_key) < 32:
             raise ValueError("census masking key must contain at least 32 bytes")
         if not SAFE_ID.fullmatch(topic):

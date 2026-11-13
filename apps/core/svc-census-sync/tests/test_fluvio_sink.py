@@ -50,3 +50,12 @@ async def test_unacknowledged_or_wrong_topic_publication_fails_closed():
         await sink.publish("census.pings", "tenant-a", "{}")
     with pytest.raises(ValueError):
         await sink.publish("other", "tenant-a", "{}")
+
+
+def test_census_topic_is_a_legal_fluvio_name(monkeypatch):
+    from fluvio_sink import census_topic
+    monkeypatch.delenv("CENSUS_FLUVIO_TOPIC", raising=False)
+    assert census_topic() == "census-pings"
+    monkeypatch.setenv("CENSUS_FLUVIO_TOPIC", "census.pings")
+    with pytest.raises(ValueError):
+        census_topic()

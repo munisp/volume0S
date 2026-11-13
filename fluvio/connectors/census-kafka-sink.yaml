@@ -3,7 +3,7 @@ meta:
   version: 0.3.2
   name: volumeos-census-kafka-sink
   type: kafka-sink
-  topic: census.pings
+  topic: census-pings  # the Fluvio topic (Fluvio names allow no dots); Kafka keeps census.pings
 kafka:
   url: kafka-kafka-bootstrap.data.svc.cluster.local:9092
   topic: census.pings

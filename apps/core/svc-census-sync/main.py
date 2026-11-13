@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
         app.state.sink = FluvioCensusSink.from_env()
         app.state.authenticator = OIDCAuthenticator()
         masking_key = base64.b64decode(os.environ.get("CENSUS_MASKING_KEY", ""), validate=True)
-        app.state.sync = CensusSync(app.state.store, app.state.sink, masking_key)
+        app.state.sync = CensusSync(app.state.store, app.state.sink, masking_key, app.state.sink.topic)
     yield
     if app.state.configure:
         await app.state.store.close()
