@@ -1,12 +1,25 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Ban, Check, CircleAlert, Clock3, FileCheck2, Loader2, Plus, RefreshCw, ShieldCheck } from 'lucide-react'
 import { ApiError, VolumeOSApi } from '../lib/api'
+import { Confirm, KindStatus } from '../components/ui'
+import { dateTime } from '../lib/format'
 import type { EngagementOffer, EngagementSnapshot } from '../lib/types'
 
 type Props = {
   api: VolumeOSApi
   connected: boolean
   notify: (kind: 'success' | 'error' | 'info', message: string) => void
+  /** Engagement to open first (from the page URL). */
+  initialId?: string
+  /** Called when the person opens another engagement, so the page URL can follow. */
+  onSelect?: (engagementId: string) => void
+  /** Whether this person's role may start / review engagements; the server checks again either way. */
+  canStart?: boolean
+  canReview?: boolean
+  /** Shown instead of the start form or the review buttons when the role doesn't allow them. */
+  roleNote?: (action: 'start' | 'review') => ReactNode
+  /** How to name the person who decided (the review stores their account id). */
+  reviewerLabel?: (reviewerId: string) => string
 }
 
 const offerNames: Record<EngagementOffer, string> = {
@@ -24,11 +37,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The operation could not be completed.'
 }
 
+/** The console-wide status vocabulary (lib/workflows): the same colour means the same thing on every screen. */
 function Badge({ status }: { status: string }) {
-  const tone = status === 'approved' ? 'status-active'
-    : ['rejected', 'approval-expired'].includes(status) ? 'status-danger'
-      : ['validating', 'planning', 'awaiting-approval'].includes(status) ? 'status-warning' : 'status-neutral'
-  return <span className={`status-badge ${tone}`}>{status.replaceAll('-', ' ')}</span>
+  return <KindStatus kind="engagement" status={status} />
 }
 
 function formatTime(value: string) {
@@ -37,7 +48,7 @@ function formatTime(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-export function EngagementOperationsSection({ api, connected, notify }: Props) {
+export function EngagementOperationsSection({ api, connected, notify, initialId, onSelect, canStart = true, canReview = true, roleNote, reviewerLabel = id => id }: Props) {
   const [engagements, setEngagements] = useState<EngagementSnapshot[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [selected, setSelected] = useState<EngagementSnapshot | null>(null)
@@ -47,9 +58,13 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
   const [feedError, setFeedError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [stalePlan, setStalePlan] = useState(false)
-  const [reviewReason, setReviewReason] = useState('Scope, controls, and prohibited actions checked against the customer request')
+  const [reviewReason, setReviewReason] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  // A deep link to an engagement this business doesn't have: say so, never open another one instead (BB-04).
+  const [missingId, setMissingId] = useState<string | null>(null)
   const requestGeneration = useRef(0)
   const selectedIdRef = useRef('')
+  const initialIdRef = useRef(initialId)
 
   const refresh = useCallback(async (preferredId?: string) => {
     if (!connected) {
@@ -67,11 +82,13 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
       if (generation !== requestGeneration.current) return
       setEngagements(feed.engagements)
       const currentId = selectedIdRef.current
-      const nextId = preferredId && feed.engagements.some(item => item.engagement_id === preferredId)
-        ? preferredId
-        : feed.engagements.some(item => item.engagement_id === currentId)
-          ? currentId
-          : feed.engagements[0]?.engagement_id ?? ''
+      const linked = initialIdRef.current
+      const has = (id: string | undefined) => Boolean(id) && feed.engagements.some(item => item.engagement_id === id)
+      const nextId = has(preferredId) ? preferredId!
+        : has(currentId) ? currentId
+          : !currentId && linked ? (has(linked) ? linked : '')
+            : feed.engagements[0]?.engagement_id ?? ''
+      setMissingId(!currentId && linked && !has(linked) ? linked : null)
       selectedIdRef.current = nextId
       setSelectedId(nextId)
       const snapshot = nextId ? await api.engagement(nextId) : null
@@ -90,7 +107,7 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
   }, [api, connected])
 
   useEffect(() => {
-    const initial = window.setTimeout(() => void refresh(), 0)
+    const initial = window.setTimeout(() => void refresh(initialIdRef.current), 0)
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh()
     }, 30_000)
@@ -102,6 +119,8 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
   }, [refresh])
 
   async function inspect(engagementId: string) {
+    onSelect?.(engagementId)
+    setMissingId(null)
     const generation = ++requestGeneration.current
     selectedIdRef.current = engagementId
     setSelectedId(engagementId)
@@ -167,16 +186,17 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
   }
 
   const awaiting = engagements.filter(item => item.status === 'awaiting-approval').length
-  const terminal = engagements.filter(item => ['approved', 'rejected', 'approval-expired'].includes(item.status)).length
+  const terminal = engagements.filter(item => ['approved', 'rejected', 'approval-expired', 'failed', 'cancelled'].includes(item.status)).length
+  const failedCount = engagements.filter(item => item.status === 'failed').length
   const reviewDisabled = !connected || busy || Boolean(feedError) || Boolean(detailError)
     || selected?.status !== 'awaiting-approval' || !selected.plan || !reviewReason.trim()
 
   return <div className="page engagement-operations-page">
     <section className="page-heading split-heading">
       <div>
-        <p className="section-kicker">Volume III · Offers 27–34</p>
-        <h1 className="page-title">Plan the work.<br />Approve the exact scope.</h1>
-        <p className="heading-copy">Create a tenant-scoped service engagement, inspect the generated plan, and bind the review to its SHA-256. These offers remain source-only and unpriced.</p>
+        <p className="section-kicker">Work · Offers 27–34 · plan only</p>
+        <h1 className="page-title">Engagements</h1>
+        <p className="heading-copy">A service request becomes a generated plan that a person approves or rejects, bound to the plan's exact SHA-256. Engagements are unpriced: nothing is charged or delivered.</p>
       </div>
       <div className="heading-actions">
         <button className="button button-secondary" onClick={() => void refresh(selectedId || undefined)} disabled={!connected || loading}>
@@ -190,13 +210,13 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
 
     <section className="section-block">
       <div className="section-heading">
-        <div><p className="section-kicker">Authenticated delivery queue</p><h2>Engagement register</h2></div>
-        <span className="data-label">Temporal · engagements-v1</span>
+        <div><h2>All engagements</h2></div>
       </div>
       <div className="operational-counts" aria-label="Engagement status summary">
         <span><strong>{engagements.length}</strong> engagements</span>
         <span><strong>{awaiting}</strong> awaiting approval</span>
-        <span><strong>{terminal}</strong> terminal</span>
+        <span><strong>{terminal}</strong> finished</span>
+        {failedCount > 0 && <span><strong>{failedCount}</strong> failed</span>}
       </div>
       <div className="workspace-grid">
         <section className="queue-panel" aria-label="Engagement queue">
@@ -222,6 +242,7 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
             <div><span className="data-label">Digest-bound plan review</span><h2>{selected?.title ?? (detailLoading ? 'Loading engagement…' : 'No engagement selected')}</h2><p>{selected ? `Offer ${selected.offer} · ${offerNames[selected.offer]} · ${selected.engagement_id}` : 'Select a queue item or create an engagement below.'}</p></div>
             {selected && <Badge status={selected.status} />}
           </div>
+          {missingId && !selected && <div className="feed-error" role="status"><CircleAlert size={17} /><span>There's no engagement “{missingId}” in this business. The link may be mistyped, or the engagement belongs to another business. Choose one from the list.</span></div>}
           {detailError && <div className="feed-error" role="alert"><CircleAlert size={17} /><span>{detailError}</span></div>}
           {stalePlan && <div className="feed-error" role="alert"><RefreshCw size={17} /><span>The plan changed before review. The current plan has been reloaded; inspect its new digest before deciding.</span></div>}
           {detailLoading && <div className="empty-review" role="status"><Loader2 className="spin" size={18} /><p>Reading the current workflow snapshot…</p></div>}
@@ -247,14 +268,16 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
               <details className="raw-plan"><summary>View exact plan JSON</summary><pre>{JSON.stringify(selected.document, null, 2)}</pre></details>
             </details>}
             {selected.review && <div className={`review-record ${selected.review.decision}`} role="status">
-              <ShieldCheck size={18} /><div><strong>Plan {selected.review.decision} by {selected.review.reviewer}</strong><p>{selected.review.reason}</p><span>{new Date(selected.review.reviewed_at_unix * 1000).toLocaleString('en-NG')} · digest {selected.review.plan_sha256.slice(0, 16)}…</span></div>
+              <ShieldCheck size={18} /><div><strong>Plan {selected.review.decision} by {reviewerLabel(selected.review.reviewer)}</strong><p>{selected.review.reason}</p><span>{dateTime(selected.review.reviewed_at_unix)} · plan fingerprint {selected.review.plan_sha256.slice(0, 12)}…</span></div>
             </div>}
+            {selected.status === 'failed' && <div className="feed-error" role="status"><CircleAlert size={17} /><span>This engagement failed{selected.stalled_status ? ` while ${selected.stalled_status.replaceAll('-', ' ')}` : ''} and won't continue. Create a new engagement to try again.</span></div>}
             {selected.status === 'approval-expired' && <div className="feed-error" role="status"><Clock3 size={17} /><span>The 30-day approval window expired. This plan cannot be reviewed; create a new engagement for a fresh plan.</span></div>}
             {selected.status === 'approved' && <div className="connection-note"><ShieldCheck size={17} /><span>Approval covers this plan only. It does not activate pricing, subscriptions, customer delivery, monitoring, procurement, or external integrations.</span></div>}
-            {selected.status === 'awaiting-approval' && selected.plan && <>
-              <label className="field"><span>Review reason</span><textarea rows={3} maxLength={1000} value={reviewReason} onChange={event => setReviewReason(event.target.value)} required /></label>
+            {selected.status === 'awaiting-approval' && selected.plan && !canReview && roleNote?.('review')}
+            {selected.status === 'awaiting-approval' && selected.plan && canReview && <>
+              <label className="field"><span>Review reason</span><textarea rows={3} maxLength={1000} value={reviewReason} onChange={event => setReviewReason(event.target.value)} placeholder="In your own words: what you checked, and why you approve or reject" required /></label>
               <div className="safety-actions">
-                <button className="button button-primary" onClick={() => void review('approved')} disabled={reviewDisabled}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Approve exact plan</button>
+                <button className="button button-primary" onClick={() => setConfirming(true)} disabled={reviewDisabled}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Approve exact plan</button>
                 <button className="button button-danger-quiet" onClick={() => void review('rejected')} disabled={reviewDisabled}><Ban size={16} /> Reject plan</button>
               </div>
             </>}
@@ -265,7 +288,7 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
 
     <section className="section-block">
       <div className="section-heading"><div><p className="section-kicker">New service request</p><h2>Create a plan-only engagement</h2></div><span className="data-label">No pricing · no charges · no external delivery</span></div>
-      <form onSubmit={startEngagement} className="approval-form">
+      {!canStart ? roleNote?.('start') : <form onSubmit={startEngagement} className="approval-form">
         <div className="form-grid">
           <label className="field"><span>Offer</span><select name="offer" defaultValue="27" aria-label="Offer" required>{Object.entries(offerNames).map(([id, name]) => <option key={id} value={id}>{id} · {name}</option>)}</select></label>
           <label className="field"><span>Engagement ID</span><input name="engagement_id" placeholder="makeover-aster-01" pattern="[a-zA-Z0-9][a-zA-Z0-9._:\-]*" maxLength={96} required /></label>
@@ -273,9 +296,15 @@ export function EngagementOperationsSection({ api, connected, notify }: Props) {
         <label className="field"><span>Engagement title</span><input name="title" placeholder="Aster Foods website improvement plan" minLength={1} maxLength={160} required /></label>
         <label className="field"><span>Scope</span><textarea name="scope" rows={5} placeholder="Describe the customer context, requested work, source materials, constraints, and acceptance boundary." minLength={1} maxLength={10000} required /></label>
         <label className="field"><span>Requested outcome (optional)</span><textarea name="requested_outcome" rows={3} placeholder="State the outcome the customer asked for; do not include prices or promises of completed delivery." maxLength={5000} /></label>
-        <p className="body-copy">The tenant ID and reviewer identity come from the authenticated OIDC session. Submission starts plan generation only; approval never activates commercial terms or production delivery.</p>
+        <p className="body-copy">Your business and your name as the requester come from your sign-in. Submission starts plan generation only; approval never activates commercial terms or production delivery.</p>
         <button className="button button-primary" disabled={!connected || busy || Boolean(feedError)}>{busy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Create engagement plan</button>
-      </form>
+      </form>}
     </section>
+    {confirming && selected?.plan && <Confirm title="Approve this exact plan?" confirmLabel="Approve plan" busy={busy}
+      onCancel={() => setConfirming(false)} onConfirm={() => { setConfirming(false); void review('approved') }}>
+      <p>You're approving version {selected.plan.version} of “{selected.title}”, fingerprint <span className="mono">{selected.plan.sha256.slice(0, 12)}…</span>, with your reason:</p>
+      <p style={{ marginTop: 6 }}><em>{reviewReason.trim()}</em></p>
+      <p style={{ marginTop: 8 }}>Approval covers this plan only. It doesn't charge anything or start delivery.</p>
+    </Confirm>}
   </div>
 }

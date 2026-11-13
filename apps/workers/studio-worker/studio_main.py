@@ -13,20 +13,30 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-import boto3
-import httpx
-from PIL import Image
+import concurrent.futures
+
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-import metrics
+# Temporal re-imports this module in its workflow sandbox; these are used only by activities and can't be
+# re-imported there (the worker would refuse to start: "Failed validating workflow StudioWorkflow").
+with workflow.unsafe.imports_passed_through():
+    import boto3
+    import httpx
+    from PIL import Image
+
+    import metrics
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
 PACK_IMAGES = {"starter": 5, "growth": 7, "pro": 12}
-WORKFLOW_VERSION = "shopfront-img2img-v1"
+# shopfront-img2img-v1: SD-class checkpoint, 28 steps (GPU). shopfront-img2img-lcm-v1: SD 1.5 + LCM-LoRA, 6 steps,
+# ~512 px working size, for CPU-only ComfyUI. Chosen per deployment with STUDIO_WORKFLOW.
+WORKFLOW_VERSION = os.environ.get("STUDIO_WORKFLOW", "shopfront-img2img-v1")
+# How long one pack may take to generate: minutes on a GPU, much longer on CPU.
+GENERATION_SECONDS = int(os.environ.get("STUDIO_GENERATION_SECONDS", "3600"))
 
 
 @dataclass
@@ -40,6 +50,7 @@ class StudioInput:
     materials: str
     dimensions: str
     price_text: str
+    style: str = ""  # optional art direction from the operator ("on a wooden table, warm morning light")
 
 
 @dataclass
@@ -84,17 +95,23 @@ def validate_studio(value: StudioInput) -> None:
         raise ApplicationError("tier must be starter, growth, or pro", non_retryable=True)
     if not value.source_image.strip() or not value.checkpoint.strip():
         raise ApplicationError("source_image and checkpoint are required", non_retryable=True)
-    if len(value.materials) > 500 or len(value.dimensions) > 200 or len(value.price_text) > 100:
+    if not value.source_image.startswith(f"{value.tenant_id}/uploads/"):
+        raise ApplicationError("the product photo must be one this business uploaded", non_retryable=True)
+    if len(value.materials) > 500 or len(value.dimensions) > 200 or len(value.price_text) > 100 or len(value.style) > 300:
         raise ApplicationError("product metadata exceeds its limit", non_retryable=True)
 
 
-def render_workflow(value: StudioInput) -> dict[str, Any]:
+def render_workflow(value: StudioInput, comfy_image: str = "") -> dict[str, Any]:
     validate_studio(value)
-    path = Path(__file__).resolve().parent / "workflows" / "shopfront-img2img-v1.json"
+    if not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", WORKFLOW_VERSION) or ".." in WORKFLOW_VERSION:
+        raise ApplicationError("invalid STUDIO_WORKFLOW", non_retryable=True)
+    path = Path(__file__).resolve().parent / "workflows" / f"{WORKFLOW_VERSION}.json"
     template = path.read_text()
     replacements = {
         "{{checkpoint}}": value.checkpoint,
-        "{{source_image}}": value.source_image,
+        # The name ComfyUI gave the uploaded photo (see submit_studio_pack), not our storage key.
+        "{{source_image}}": comfy_image or value.source_image,
+        "{{style}}": value.style,
         "{{tenant_id}}": value.tenant_id,
         "{{pack_id}}": value.pack_id,
         "{{materials}}": value.materials,
@@ -117,8 +134,10 @@ def delivery_variants(source: bytes) -> dict[str, bytes]:
         image = opened.convert("RGB")
         variants = {}
         for name, size in (("whatsapp", 1080), ("jumia", 1000)):
-            copy = image.copy()
-            copy.thumbnail((size, size), Image.Resampling.LANCZOS)
+            # Fit inside the square, enlarging as well as shrinking: CPU packs come out ~560 px, and thumbnail()
+            # alone only shrinks, which left a small picture in the middle of a big white square.
+            scale = min(size / image.width, size / image.height)
+            copy = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.Resampling.LANCZOS)
             canvas = Image.new("RGB", (size, size), "white")
             canvas.paste(copy, ((size - copy.width) // 2, (size - copy.height) // 2))
             output = io.BytesIO()
@@ -170,9 +189,49 @@ async def comfy_request(method: str, path: str, **kwargs: Any) -> httpx.Response
         return response
 
 
+MAX_SOURCE_PIXELS = 60_000_000  # a 48 MP phone photo fits; a "small" PNG declaring a giant canvas does not
+SOURCE_MAX_SIDE = 2048            # the workflow scales to well under 1 MP anyway (ImageScaleToTotalPixels)
+
+
+def fit_source_photo(data: bytes) -> bytes:
+    """ComfyUI decodes the photo it is given in full, next to the model: a few-KB PNG claiming 13,000 x 13,000 px
+    takes gigabytes and would take Studio down for every business. The header gives the size without decoding;
+    too many pixels is refused, and a big photo is shrunk here (inside this worker's own memory) before it goes."""
+    with Image.open(io.BytesIO(data)) as image:
+        width, height = image.size
+        if width * height > MAX_SOURCE_PIXELS:
+            raise ApplicationError(f"the product photo is too large ({width} x {height}); use one under 60 megapixels",
+                                   type="SourcePhotoTooLarge", non_retryable=True)
+        if max(width, height) <= SOURCE_MAX_SIDE:
+            return data
+        image.draft("RGB", (SOURCE_MAX_SIDE, SOURCE_MAX_SIDE))  # JPEG decodes at a reduced scale; others ignore it
+        small = image.convert("RGB")
+        small.thumbnail((SOURCE_MAX_SIDE, SOURCE_MAX_SIDE), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        small.save(out, format="PNG")
+        return out.getvalue()
+
+
+async def upload_source_image(value: StudioInput) -> str:
+    """ComfyUI's LoadImage reads from its own input folder: copy the business's uploaded photo there first."""
+    data = await asyncio.to_thread(asset_store().get, value.source_image)
+    with Image.open(io.BytesIO(data)) as opened:  # refuse anything that isn't a real image before it reaches ComfyUI
+        opened.verify()
+    data = await asyncio.to_thread(fit_source_photo, data)
+    digest = hashlib.sha256(data).hexdigest()[:16]
+    response = await comfy_request("POST", "/upload/image", data={"subfolder": f"volumeos/{value.tenant_id}", "overwrite": "true", "type": "input"},
+                                   files={"image": (f"{value.pack_id}-{digest}.png", data, "application/octet-stream")})
+    body = response.json()
+    name, subfolder = str(body.get("name", "")), str(body.get("subfolder", ""))
+    if not name:
+        raise ApplicationError("ComfyUI didn't accept the product photo")
+    return f"{subfolder}/{name}" if subfolder else name
+
+
 @activity.defn
 async def submit_studio_pack(value: StudioInput) -> str:
-    graph = render_workflow(value)
+    comfy_image = await upload_source_image(value)
+    graph = render_workflow(value, comfy_image)
     activity.heartbeat()
     response = await comfy_request("POST", "/prompt", headers={
         "Idempotency-Key": f"studio:{value.tenant_id}:{value.pack_id}",
@@ -186,7 +245,7 @@ async def submit_studio_pack(value: StudioInput) -> str:
 
 @activity.defn
 async def wait_studio_pack(value: StudioInput, prompt_id: str) -> list[dict[str, str]]:
-    deadline = asyncio.get_running_loop().time() + 600
+    deadline = asyncio.get_running_loop().time() + GENERATION_SECONDS
     while asyncio.get_running_loop().time() < deadline:
         activity.heartbeat()
         response = await comfy_request("GET", f"/history/{prompt_id}")
@@ -203,7 +262,7 @@ async def wait_studio_pack(value: StudioInput, prompt_id: str) -> list[dict[str,
             if not images:
                 raise ApplicationError("ComfyUI completed without images")
             return images
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
     raise ApplicationError("ComfyUI polling timed out")
 
 
@@ -225,7 +284,17 @@ async def store_qa_assets(value: StudioInput, images: list[dict[str, str]]) -> Q
                            "workflow_version": WORKFLOW_VERSION, "assets": keys, "qa_status": "pending"}, indent=2).encode()
     manifest_sha256 = hashlib.sha256(manifest).hexdigest()
     await asyncio.to_thread(store.put, f"{qa_prefix(value)}/manifest.json", manifest, "application/json")
+    await release_comfy_memory()
     return QAManifest(keys, manifest_sha256)
+
+
+async def release_comfy_memory() -> None:
+    """Asks ComfyUI to unload its models once a pack's images are saved. On a CPU host ComfyUI otherwise keeps
+    ~4.6 GiB of weights in RAM between packs (the next pack reloads them in seconds). Best effort: never fails a pack."""
+    try:
+        await comfy_request("POST", "/free", json={"unload_models": True, "free_memory": True})
+    except Exception as exc:  # noqa: BLE001 - housekeeping only
+        activity.logger.warning("ComfyUI didn't release its memory: %s", exc)
 
 
 @activity.defn
@@ -373,7 +442,9 @@ class StudioWorkflow:
             "retry_policy": RetryPolicy(maximum_attempts=3),
         }
         prompt_id = await workflow.execute_activity(submit_studio_pack, value, **options)
-        images = await workflow.execute_activity(wait_studio_pack, args=[value, prompt_id], **options)
+        images = await workflow.execute_activity(
+            wait_studio_pack, args=[value, prompt_id], start_to_close_timeout=timedelta(seconds=GENERATION_SECONDS + 300),
+            heartbeat_timeout=timedelta(minutes=2), retry_policy=RetryPolicy(maximum_attempts=2))
         qa_manifest = await workflow.execute_activity(store_qa_assets, args=[value, images], **options)
         self._asset_count = len(qa_manifest.assets)
         self._manifest_sha256 = qa_manifest.manifest_sha256
@@ -403,6 +474,8 @@ async def main() -> None:
     )
     worker = Worker(client, task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "studio-v1"),
                     workflows=[StudioWorkflow],
+                    # record_studio_outcome is a plain (sync) function: Temporal needs a thread pool for it.
+                    activity_executor=concurrent.futures.ThreadPoolExecutor(max_workers=4),
                     activities=[submit_studio_pack, wait_studio_pack, store_qa_assets,
                                 record_studio_rejection, deliver_studio_pack, record_studio_outcome])
     await worker.run()

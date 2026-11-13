@@ -140,3 +140,13 @@ async def test_whatsapp_rejects_insecure_endpoint_and_invalid_provider_receipt()
     with pytest.raises(WhatsAppError):
         await provider.deliver(document(), "+2348012345678")
     await http.aclose()
+
+
+def test_without_whatsapp_documents_still_list_and_sending_says_it_isnt_set_up():
+    store = FakeStore()
+    api = TestClient(create_app(store, None, TOKEN))
+    assert api.get("/v1/tenants/tenant-a/documents", headers=headers()).status_code == 200
+    sent = api.post("/v1/tenants/tenant-a/documents/receipt/receipt-1/deliveries", headers=headers(),
+                    json={"channel": "whatsapp", "recipient": "+2348012345678"})
+    assert sent.status_code == 503
+    assert sent.json()["error"]["code"] == "delivery_not_configured"

@@ -291,3 +291,35 @@ def test_usage_signal_rejects_changed_day_and_cross_scope_replay():
     instance._state = "posted"
     with pytest.raises(ApplicationError, match="already closed"):
         instance.record_day(usage("2026-10-29", 2500, 1000))
+
+
+@pytest.mark.asyncio
+async def test_document_delivery_is_skipped_only_when_whatsapp_is_not_configured(monkeypatch):
+    answers = []
+
+    async def request(_service, _method, path, _tenant, _key, payload=None):
+        return answers.pop(0)
+
+    monkeypatch.setattr(billing, "service_request", request)
+    req = httpx.Request("POST", "http://documents.test/deliveries")
+    answers.append(httpx.Response(503, request=req, json={"error": {"code": "delivery_not_configured", "message": "x"}}))
+    assert await billing.deliver_document(cycle(), "invoice", "doc-1") is None
+
+    answers.append(httpx.Response(503, request=req, json={"error": {"code": "provider_unavailable", "message": "x"}}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await billing.deliver_document(cycle(), "invoice", "doc-1")
+
+
+async def test_dunning_reminder_is_skipped_without_a_messaging_service(monkeypatch):
+    calls = []
+
+    async def request(*args, **kwargs):
+        calls.append(args)
+        return httpx.Response(202, request=httpx.Request("POST", "http://messaging.test/v1/dunning-nudges"))
+
+    monkeypatch.setattr(billing, "service_request", request)
+    monkeypatch.delenv("MESSAGING_URL", raising=False)
+    assert await billing.send_dunning_nudge(cycle(), 1) is None and calls == []
+    monkeypatch.setenv("MESSAGING_URL", "http://messaging.test")
+    await billing.send_dunning_nudge(cycle(), 1)
+    assert len(calls) == 2  # whatsapp + sms when a service is configured

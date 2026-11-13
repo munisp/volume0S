@@ -10,7 +10,7 @@ dependencies = [
   "temporalio>=1.18,<2",
   "httpx>=0.28,<1",
   "boto3>=1.35,<2",
-  "Pillow>=11,<13",
+  "Pillow>=13,<14",
   "prometheus-client>=0.21,<1",
 ]
 

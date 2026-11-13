@@ -9,6 +9,7 @@ import hashlib
 import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import AsyncIterator, Protocol
 
@@ -100,7 +101,7 @@ class PostgresBillingStore:
                 invoice.subscription_id,
                 invoice.cycle,
                 invoice.invoice_number,
-                invoice.issue_date,
+                date.fromisoformat(invoice.issue_date),  # a date column: asyncpg needs a date, not its ISO text
                 invoice.currency,
                 invoice.subtotal_minor,
                 invoice.tax_minor,
@@ -215,8 +216,8 @@ class PostgresBillingStore:
                 posting.campaign_id,
                 posting.offer,
                 posting.week,
-                posting.first_day,
-                posting.last_day,
+                date.fromisoformat(posting.first_day),
+                date.fromisoformat(posting.last_day),
                 posting.event_count,
                 posting.amount_minor,
                 posting.provider_cost_minor,

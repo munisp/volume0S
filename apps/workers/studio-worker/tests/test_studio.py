@@ -29,7 +29,7 @@ from studio_main import (
 def value(**changes):
     base = dict(
         tenant_id="tenant-1", pack_id="pack-1", product_id="product-1", tier="growth",
-        source_image="tenant-1/product.png", checkpoint="product-photography.safetensors",
+        source_image="tenant-1/uploads/product.png", checkpoint="product-photography.safetensors",
         materials="cotton", dimensions="30 x 20 cm", price_text="NGN 15000",
     )
     base.update(changes)
@@ -39,7 +39,7 @@ def value(**changes):
 def test_versioned_graph_is_valid_and_carries_pack_entitlements():
     graph = render_workflow(value())
     assert graph["4"]["inputs"]["ckpt_name"] == "product-photography.safetensors"
-    assert graph["10"]["inputs"]["image"] == "tenant-1/product.png"
+    assert graph["10"]["inputs"]["image"] == "tenant-1/uploads/product.png"
     assert graph["12"]["inputs"]["amount"] == 7
     assert graph["12"]["inputs"]["samples"] == ["11", 0]
     assert graph["9"]["inputs"]["filename_prefix"] == "volumeos/tenant-1/pack-1"
@@ -218,3 +218,25 @@ def test_studio_query_and_review_are_bound_to_current_qa_manifest(monkeypatch):
     assert snapshot.status == "approved"
     assert snapshot.assets == 7
     assert snapshot.manifest_sha256 == "a" * 64
+
+
+def _png(width, height):
+    out = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(out, format="PNG")
+    return out.getvalue()
+
+
+def test_a_giant_canvas_never_reaches_comfyui(monkeypatch):
+    # A compressed PNG declaring a huge canvas is tiny on disk; it is refused from its header, before decoding.
+    monkeypatch.setattr(studio, "MAX_SOURCE_PIXELS", 10_000)
+    with pytest.raises(ApplicationError) as refused:
+        studio.fit_source_photo(_png(200, 200))
+    assert refused.value.non_retryable and "too large" in str(refused.value)
+
+
+def test_a_big_photo_is_shrunk_and_a_normal_one_is_untouched(monkeypatch):
+    monkeypatch.setattr(studio, "SOURCE_MAX_SIDE", 100)
+    small = _png(80, 60)
+    assert studio.fit_source_photo(small) == small
+    with Image.open(io.BytesIO(studio.fit_source_photo(_png(400, 200)))) as shrunk:
+        assert shrunk.size == (100, 50)

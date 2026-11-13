@@ -25,6 +25,27 @@ const claimsKey contextKey = "claims"
 type Claims struct {
 	TenantID string
 	Roles    map[string]bool
+	// Platform: the agency's own operators (token tenant "platform" + super-operator). They may list every business
+	// and act on one named in X-VolumeOS-Tenant; TenantID is then that business.
+	Platform bool
+}
+
+// PlatformTenant is the tenant id carried by the agency's own operator accounts.
+const PlatformTenant = "platform"
+
+// scopeClaims applies a platform operator's choice of business (the X-VolumeOS-Tenant header). Anyone else keeps the
+// business in their token, and the header is ignored, so a client can never reach another client's data with it.
+func scopeClaims(c Claims, requested string) (Claims, error) {
+	c.Platform = c.TenantID == PlatformTenant && c.Roles["super-operator"]
+	requested = strings.TrimSpace(requested)
+	if !c.Platform || requested == "" || requested == PlatformTenant {
+		return c, nil
+	}
+	if !tenantIDPattern.MatchString(requested) {
+		return Claims{}, errors.New("X-VolumeOS-Tenant is not a valid business id")
+	}
+	c.TenantID = requested
+	return c, nil
 }
 
 func (c Claims) Can(role string) bool {
@@ -32,7 +53,8 @@ func (c Claims) Can(role string) bool {
 		return true
 	}
 	if role == "reader" {
-		for _, allowed := range []string{"delivery", "sales", "analyst", "client-owner", "partner", "auditor"} {
+		// Same reader set as svc-orchestrator (auth.READER_ROLES); finance was missing here.
+		for _, allowed := range []string{"delivery", "sales", "analyst", "client-owner", "partner", "auditor", "finance"} {
 			if c.Roles[allowed] {
 				return true
 			}
@@ -96,7 +118,12 @@ func (a *Authenticator) authenticate(r *http.Request) (Claims, error) {
 		for _, role := range strings.Split(r.Header.Get("X-VolumeOS-Roles"), ",") {
 			roles[strings.TrimSpace(role)] = true
 		}
-		return validateClaims(Claims{TenantID: tenantID, Roles: roles})
+		claims, err := validateClaims(Claims{TenantID: tenantID, Roles: roles})
+		if err != nil {
+			return Claims{}, err
+		}
+		// Header mode: the tenant header IS the scope, so there is no separate business to act on.
+		return scopeClaims(claims, "")
 	}
 	if a.issuer == "" || a.audience == "" || a.jwksURL == "" {
 		return Claims{}, errors.New("OIDC is not configured")
@@ -118,7 +145,11 @@ func (a *Authenticator) authenticate(r *http.Request) (Claims, error) {
 	if !ok {
 		return Claims{}, errors.New("invalid claims")
 	}
-	return validateClaims(Claims{TenantID: claims.TenantID, Roles: claims.Roles})
+	scoped, err := validateClaims(Claims{TenantID: claims.TenantID, Roles: claims.Roles})
+	if err != nil {
+		return Claims{}, err
+	}
+	return scopeClaims(scoped, r.Header.Get("X-VolumeOS-Tenant"))
 }
 
 type rawClaims struct {

@@ -61,7 +61,9 @@ class PartnerExport(InputModel):
 async def lifespan(app: FastAPI):
     if app.state.configure:
         app.state.store = await PostgresDocumentStore.connect(os.environ.get("DATABASE_URL", ""))
-        app.state.whatsapp = WhatsAppDocuments.from_env()
+        # WhatsApp is only needed to SEND a document; invoices, receipts and reports work without it.
+        app.state.whatsapp = (WhatsAppDocuments.from_env()
+                              if os.environ.get("WHATSAPP_ACCESS_TOKEN") and os.environ.get("WHATSAPP_PHONE_NUMBER_ID") else None)
         app.state.service_token = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
         app.state.billing_reports = BillingReports.from_env(app.state.service_token)
         app.state.financial_exports = FinancialExports.from_env()
@@ -306,6 +308,8 @@ def create_app(
         existing = await app.state.store.get_delivery(tenant_id, kind, document_id, body.recipient)
         if existing is not None:
             return JSONResponse(status_code=200, content=existing.json())
+        if app.state.whatsapp is None:
+            return problem(503, "delivery_not_configured", "Sending documents by WhatsApp isn't set up on this deployment")
         try:
             provider_message_id = await app.state.whatsapp.deliver(document, body.recipient)
             delivery = await app.state.store.record_delivery(

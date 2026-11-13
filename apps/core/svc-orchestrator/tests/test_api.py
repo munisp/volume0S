@@ -37,8 +37,9 @@ class FakeWorkflows:
         self.prefixes.append(prefix)
         return [value for key, value in self.snapshots.items() if key.startswith(prefix)]
 
-    async def start(self, workflow_type, argument, workflow_id, task_queue):
+    async def start(self, workflow_type, argument, workflow_id, task_queue, retry_failed=False):
         self.started.append((workflow_type, argument, workflow_id, task_queue))
+        self.retry_failed = getattr(self, "retry_failed", []) + [retry_failed]
 
     async def query(self, workflow_id: str):
         return self.snapshots[workflow_id]

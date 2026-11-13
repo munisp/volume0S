@@ -9,24 +9,30 @@ import json
 import os
 from typing import Any
 
-import asyncpg
-import boto3
-import httpx
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-from books import DoclingClient, accounting_csv, accounting_csv_bytes
-from common import Approval, Artifact, BudgetGuard, OfferError, RedactedAIClient, identifier, sha256
-from compliance import BrowserAgentClient, Licence, paperwork, paperwork_payload
-from costs import PostgresCostLedger
-from engagements import EngagementWorkflow, build_engagement_plan
-from funding import FundingJob, generate_draft, new_artifact, release_funding
-from scorecards import WhisperXClient, build_report, release_report, report_payload, rubric_score
-from books import release_export
-from compliance import release_paperwork
+# OfferWorkflow lives in this module, so Temporal re-imports it inside its deterministic sandbox when the worker
+# starts. The database, HTTP and S3 clients (and the helper modules that use them) are only used by activities;
+# importing them outside the sandbox stops the sandbox rejecting the HTTP stack (http.client.IncompleteRead), the
+# same way engagements.py imports boto3.
+with workflow.unsafe.imports_passed_through():
+    import asyncpg
+    import boto3
+    import httpx
+
+    from books import DoclingClient, accounting_csv, accounting_csv_bytes
+    from common import Approval, Artifact, BudgetGuard, OfferError, RedactedAIClient, identifier, sha256
+    from compliance import BrowserAgentClient, Licence, paperwork, paperwork_payload
+    from costs import PostgresCostLedger
+    from engagements import EngagementWorkflow, build_engagement_plan
+    from funding import FundingJob, generate_draft, new_artifact, release_funding
+    from scorecards import WhisperXClient, build_report, release_report, report_payload, rubric_score
+    from books import release_export
+    from compliance import release_paperwork
 
 BATCH_OFFERS = {"03", "05", "07", "08"}
 _cost_ledger = None
@@ -258,8 +264,10 @@ async def main() -> None:
                           activities=[reserve_offer_charge, settle_offer_charge, execute_offer, release_offer])
     engagement_worker = Worker(client, task_queue="engagements-v1", workflows=[EngagementWorkflow],
                                activities=[build_engagement_plan])
+    # Entering the workers starts them (and leaving shuts both down); calling run() again inside would start each a
+    # second time, which Temporal's core rejects ("must only be set once"). So just keep the process alive.
     async with offer_worker, engagement_worker:
-        await asyncio.gather(offer_worker.run(), engagement_worker.run())
+        await asyncio.Event().wait()
 
 
 if __name__ == "__main__":

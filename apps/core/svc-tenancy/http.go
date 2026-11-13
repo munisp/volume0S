@@ -40,6 +40,7 @@ func (a *API) routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 	mux.Handle("POST /v1/tenants/current", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.createTenant))))
+	mux.Handle("GET /v1/tenants", a.auth.middleware(http.HandlerFunc(a.listTenants)))
 	mux.Handle("GET /v1/tenants/current", a.auth.middleware(a.role("reader", http.HandlerFunc(a.getTenant))))
 	mux.Handle("POST /v1/tenants/current/transitions", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.transitionTenant))))
 	mux.Handle("PUT /v1/tenants/current/outbound-suspension", a.auth.middleware(a.role("super-operator", http.HandlerFunc(a.suspendOutbound))))
@@ -88,6 +89,16 @@ func (a *API) createTenant(w http.ResponseWriter, r *http.Request) {
 		err = a.store.CreateTenant(r.Context(), tenant)
 	}
 	respond(w, r, http.StatusCreated, tenant, err)
+}
+
+// listTenants is the agency's client list: platform operators only, never a client or a business's own staff.
+func (a *API) listTenants(w http.ResponseWriter, r *http.Request) {
+	if !claimsFrom(r.Context()).Platform {
+		writeError(w, http.StatusForbidden, "forbidden", "only platform operators can list businesses")
+		return
+	}
+	list, err := a.store.ListTenants(r.Context())
+	respond(w, r, http.StatusOK, map[string]any{"tenants": list}, err)
 }
 
 func (a *API) getTenant(w http.ResponseWriter, r *http.Request) {
@@ -163,9 +174,13 @@ func (a *API) setSuppression(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	err := a.store.SetSuppression(r.Context(), claimsFrom(r.Context()).TenantID, input.Channel, input.Recipient,
+	changed, err := a.store.SetSuppression(r.Context(), claimsFrom(r.Context()).TenantID, input.Channel, input.Recipient,
 		r.Method == http.MethodPut, input.Reason)
-	respond(w, r, http.StatusOK, map[string]string{"status": "updated"}, err)
+	status := "updated"
+	if !changed && r.Method == http.MethodDelete {
+		status = "not_suppressed" // nothing was lifted: that recipient wasn't on the list
+	}
+	respond(w, r, http.StatusOK, map[string]string{"status": status}, err)
 }
 
 func (a *API) getDispatchResult(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +210,8 @@ func respond(w http.ResponseWriter, r *http.Request, status int, value any, err 
 		writeError(w, http.StatusNotFound, "not_found", "resource not found in tenant scope")
 	case errors.Is(err, ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", "resource exists or version is stale")
+	case errors.Is(err, ErrNotOnSale):
+		writeError(w, http.StatusUnprocessableEntity, "offer_not_on_sale", err.Error())
 	case errors.Is(err, ErrInvalidChange):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_state", err.Error())
 	default:
@@ -209,6 +226,7 @@ func respond(w http.ResponseWriter, r *http.Request, status int, value any, err 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff") // a browser must never treat an API answer as a page
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }

@@ -240,7 +240,9 @@ impl ProviderClient for PaystackClient {
                     "currency": request.currency.as_str(),
                     "reference": request.reference,
                     "callback_url": request.redirect_url,
-                    "metadata": {"tenant_id": request.tenant_id},
+                    // "platform" lets a shared Paystack account's single webhook URL route the
+                    // notification to VolumeOS (the account's webhook points at another app).
+                    "metadata": {"tenant_id": request.tenant_id, "platform": "volumeos"},
                 }))
                 .send()
                 .await

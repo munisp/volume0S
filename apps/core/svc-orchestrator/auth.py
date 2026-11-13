@@ -18,15 +18,35 @@ class AuthenticationError(Exception):
     """An authentication failure safe to map to HTTP 401."""
 
 
+PLATFORM_TENANT = "platform"
+
+
 @dataclass(frozen=True)
 class Claims:
     tenant_id: str
     actor: str
     roles: frozenset[str]
+    # The agency's own operators (token tenant "platform" + super-operator): they may act on any business named in
+    # X-VolumeOS-Tenant, and only they may grant super-operator. tenant_id is then the business acted on.
+    platform: bool = False
 
     def can(self, role: str) -> bool:
         return ("super-operator" in self.roles or role in self.roles
                 or (role == "reader" and bool(self.roles & READER_ROLES)))
+
+
+def scope_claims(claims: Claims, requested: str | None) -> Claims:
+    """Apply a platform operator's choice of business. Anyone else keeps the business in their token and the header
+    is ignored, so a client can never reach another client's data with it (same rule as svc-tenancy scopeClaims)."""
+    platform = claims.tenant_id == PLATFORM_TENANT and "super-operator" in claims.roles
+    requested = (requested or "").strip()
+    if not platform:
+        return Claims(claims.tenant_id, claims.actor, claims.roles, False)
+    if not requested or requested == PLATFORM_TENANT:
+        return Claims(claims.tenant_id, claims.actor, claims.roles, True)
+    if not SAFE_ID.fullmatch(requested):
+        raise AuthenticationError("X-VolumeOS-Tenant is not a valid business id")
+    return Claims(requested, claims.actor, claims.roles, True)
 
 
 class OIDCAuthenticator:

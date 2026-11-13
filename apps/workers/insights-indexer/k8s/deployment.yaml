@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: insights-indexer
+  namespace: workers
+  labels: {app.kubernetes.io/name: insights-indexer, app.kubernetes.io/part-of: volumeos}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insights-indexer
+  namespace: workers
+  labels: {app.kubernetes.io/name: insights-indexer, app.kubernetes.io/part-of: volumeos}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: insights-indexer}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: insights-indexer, app.kubernetes.io/part-of: volumeos}
+    spec:
+      serviceAccountName: insights-indexer
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: indexer
+          image: ghcr.io/munisp/insights-indexer:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: OPENSEARCH_URL, value: https://opensearch-cluster-master.data.svc.cluster.local:9200}
+            - {name: S3_ENDPOINT_URL, value: http://minio.data.svc.cluster.local:9000}
+            - {name: ASSET_BUCKET, value: assets}
+            - {name: INTERVAL_SECONDS, value: "600"}
+          envFrom:
+            # DATABASE_URL, OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+            - secretRef: {name: insights-indexer}
+          resources: {requests: {cpu: 20m, memory: 96Mi}, limits: {cpu: 300m, memory: 256Mi}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +55,17 @@ func (s *MemoryStore) Tenant(_ context.Context, id string) (Tenant, error) {
 	return cloneTenant(t), nil
 }
 
+func (s *MemoryStore) ListTenants(context.Context) ([]TenantSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list := make([]TenantSummary, 0, len(s.tenants))
+	for _, t := range s.tenants {
+		list = append(list, summarize(t))
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
+	return list, nil
+}
+
 func (s *MemoryStore) TransitionTenant(_ context.Context, id string, to Lifecycle, version int64, _ string) (Tenant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,7 +106,10 @@ func (s *MemoryStore) CreateWorkspace(_ context.Context, tenantID, name string) 
 	if !ok {
 		return Workspace{}, ErrNotFound
 	}
-	if t.State == Offboarded || strings.TrimSpace(name) == "" {
+	if err := checkName("workspace name", name); err != nil {
+		return Workspace{}, err
+	}
+	if t.State == Offboarded {
 		return Workspace{}, ErrInvalidChange
 	}
 	w := Workspace{ID: newID(), TenantID: tenantID, Name: strings.TrimSpace(name), CreatedAt: time.Now().UTC()}
@@ -111,7 +126,10 @@ func (s *MemoryStore) CreateSubscription(_ context.Context, tenantID, offer, tie
 	if !ok {
 		return Subscription{}, ErrNotFound
 	}
-	if err := ValidateSubscription(offer, tier); err != nil || t.State == Offboarded {
+	if err := ValidateSubscription(offer, tier); err != nil {
+		return Subscription{}, ErrNotOnSale
+	}
+	if t.State == Offboarded {
 		return Subscription{}, ErrInvalidChange
 	}
 	for _, existing := range t.Subscriptions {
@@ -153,10 +171,6 @@ func validCurrency(currency string) bool {
 	return true
 }
 
-func validSuppressionInput(channel, recipient, reason string, suppressed bool) bool {
-	reason = strings.TrimSpace(reason)
-	return validMessagingChannel(channel) && normalizeRecipient(recipient) != "" && len(reason) <= 500 && (!suppressed || reason != "")
-}
 
 func (s *MemoryStore) AuthorizeDispatch(_ context.Context, tenantID, channel, recipient string) (DispatchDecision, error) {
 	s.mu.RLock()
@@ -180,22 +194,23 @@ func (s *MemoryStore) AuthorizeDispatch(_ context.Context, tenantID, channel, re
 	return DispatchDecision{Allowed: true, Reason: "authorized"}, nil
 }
 
-func (s *MemoryStore) SetSuppression(_ context.Context, tenantID, channel, recipient string, suppressed bool, reason string) error {
-	if !validSuppressionInput(channel, recipient, reason, suppressed) {
-		return ErrInvalidChange
+func (s *MemoryStore) SetSuppression(_ context.Context, tenantID, channel, recipient string, suppressed bool, reason string) (bool, error) {
+	if err := checkSuppressionInput(channel, recipient, reason, suppressed); err != nil {
+		return false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.tenants[tenantID]; !ok {
-		return ErrNotFound
+		return false, ErrNotFound
 	}
 	key := suppressionKey(tenantID, channel, recipient)
 	if suppressed {
 		s.suppressions[key] = strings.TrimSpace(reason)
-	} else {
-		delete(s.suppressions, key)
+		return true, nil
 	}
-	return nil
+	_, existed := s.suppressions[key]
+	delete(s.suppressions, key)
+	return existed, nil
 }
 
 func (s *MemoryStore) GetDispatchResult(_ context.Context, tenantID, key string) (DispatchResult, error) {

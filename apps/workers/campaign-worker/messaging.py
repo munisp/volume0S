@@ -13,8 +13,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-import httpx
 from temporalio.exceptions import ApplicationError
+from temporalio import workflow as _wf
+
+with _wf.unsafe.imports_passed_through():
+    import httpx
 
 import metrics
 

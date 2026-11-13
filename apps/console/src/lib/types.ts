@@ -25,20 +25,35 @@ export type Bundle = {
   studio_packs_per_month: number
 }
 
+/** As svc-tenancy sends it (domain.go Tenant). The lifecycle is `state`; the console once read a `lifecycle` field
+ * that never existed, so every tenant showed as "required". */
 export type Tenant = {
   id: string
   name: string
   slug: string
-  lifecycle: string
+  state: 'prospect' | 'onboarding' | 'active' | 'paused' | 'offboarded'
   version: number
   outbound_suspended: boolean
-  suspension_reason?: string
   created_at?: string
   updated_at?: string
+  workspaces?: Workspace[] | null
+  subscriptions?: Subscription[] | null
 }
 
-export type Workspace = { id: string; tenant_id: string; name: string }
-export type Subscription = { id: string; tenant_id: string; offer: string; tier: string; status: string }
+/** One row of the agency's client list (platform operators only). */
+export type TenantSummary = {
+  id: string; name: string; slug: string; state: Tenant['state']; outbound_suspended: boolean
+  created_at: string; updated_at: string; workspaces: number; offers: string[]
+}
+
+/** A sign-in of one business (Keycloak user), with its single VolumeOS role. */
+export type Person = {
+  id: string; username: string; email: string; first_name: string; last_name: string
+  enabled: boolean; roles: string[]; created_at: number; must_set_password: boolean
+}
+
+export type Workspace = { id: string; tenant_id: string; name: string; created_at?: string }
+export type Subscription = { id: string; tenant_id: string; offer: string; tier: string; created_at?: string }
 
 export type CampaignStatus = 'drafting' | 'awaiting_approval' | 'approved' | 'reserving' | 'dispatching' | 'settling' | 'completed' | 'approval_timed_out' | 'failed' | 'cancelled'
 export type StudioStatus = 'generating' | 'awaiting_qa' | 'approved' | 'rejecting' | 'rejected' | 'delivering' | 'delivered' | 'qa_timed_out' | 'failed' | 'cancelled'
@@ -67,7 +82,7 @@ export type StudioSnapshot = {
   updated_at: string
 }
 
-export type StudioAsset = { id: string; url: string; expires_in: number }
+export type StudioAsset = { id: string; url: string }
 export type StudioAssetResponse = { pack_id: string; manifest_sha256: string; assets: StudioAsset[] }
 
 export type Campaign = {
@@ -93,7 +108,6 @@ export type StudioPack = {
   updated: string
 }
 
-export type PageId = 'overview' | 'onboarding' | 'campaigns' | 'studio' | 'billing' | 'offers' | 'engagements' | 'settings'
 
 export type Balance = {
   account_id: string
@@ -266,7 +280,10 @@ export type EngagementSnapshot = {
   engagement_id: string
   offer: EngagementOffer
   title: string
-  status: 'validating' | 'planning' | 'awaiting-approval' | 'approved' | 'rejected' | 'approval-expired'
+  status: 'validating' | 'planning' | 'awaiting-approval' | 'approved' | 'rejected' | 'approval-expired' | 'failed' | 'cancelled'
+  /** Set by the orchestrator when the workflow ended without finishing (status then reads failed/cancelled). */
+  error?: string | null
+  stalled_status?: string | null
   commercial_status: 'source-only-unpriced'
   delivery_mode: 'plan-only'
   charges_enabled: false
@@ -285,3 +302,12 @@ export type EngagementStartInput = {
   scope: string
   requested_outcome: string
 }
+
+export type CampaignDraft = { draft_id: string; campaign_id: string; subject: string; email_body: string; whatsapp_text: string; social_text?: string; model: string; created_at: string }
+export type CampaignResult = { cycle_id: string; channel: 'email' | 'whatsapp' | 'social'; status: 'sent' | 'test_address' | 'blocked' | 'failed'; count: number }
+export type CampaignContact = { id: string; first_name: string; email: string | null; phone: string | null; email_consent: boolean; whatsapp_consent: boolean; source: string; created_at: string }
+export type SocialAccount = { id: string; name: string; network: string; picture: string; disabled: boolean }
+export type SocialStatus = { available: boolean; connected: boolean; accounts: SocialAccount[]; postiz_url?: string; problem?: string }
+export type InsightMetrics = { paid_in_minor: number; topups?: number; campaign_spend_minor?: number; charged_minor: number; invoices: number; receipts: number; emails: number; whatsapp: number; social_posts: number; campaigns_sent: number; studio_packs: number; studio_images: number; contacts_added: number }
+export type InsightMonth = { month: string; title: string; summary: string; metrics: InsightMetrics; updated_at: string | null }
+export type ActivityRow = { trace_id: string; event_date: string; message: string; service: string; level: string; tenant_id: string }

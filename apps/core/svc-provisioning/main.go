@@ -30,12 +30,16 @@ func main() {
 		slog.Error("Postiz configuration failed", "error", err)
 		os.Exit(1)
 	}
+	mailer := NewMailerFromEnv()
+	if mailer == nil {
+		slog.Warn("RESEND_API_KEY is not set: new sign-ins will be refused (their details are emailed)")
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 	server := &http.Server{
-		Addr: ":" + port, Handler: (&API{serviceToken: serviceToken, keycloak: keycloak, postiz: postiz}).routes(),
+		Addr: ":" + port, Handler: (&API{serviceToken: serviceToken, keycloak: keycloak, postiz: postiz, mailer: mailer}).routes(),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second,
 	}
