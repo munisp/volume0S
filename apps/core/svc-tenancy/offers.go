@@ -100,6 +100,9 @@ var q1Offers = []Offer{
 	{ID: "32", Name: "Industry Audio Briefings", Module: "research.briefings", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
 	{ID: "33", Name: "Bid Radar", Module: "procurement.radar", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
 	{ID: "34", Name: "Website Guard", Module: "monitoring.website", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
+	// Creators Home: a YouTube production line (research, script, voice, scenes, thumbnail, SEO, assembly, upload)
+	// on svc-creators. Unpriced until its tiers (videos per month, length) are set by the operator.
+	{ID: "35", Name: "Creators Home", Module: "media.creators", CommercialStatus: "source-only-unpriced", Tiers: []OfferTier{}},
 }
 
 var q1Bundles = []Bundle{{

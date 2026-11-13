@@ -13,6 +13,7 @@ resources:
   - ../../../apps/core/svc-collections/k8s
   - ../../../apps/core/svc-documents/k8s
   - ../../../apps/core/svc-campaigns/k8s
+  - ../../../apps/core/svc-creators/k8s
   - ../../../apps/workers/billing-worker/k8s
   - ../../../apps/data/usage-rollup/k8s
   - ../../../apps/data/lakehouse/k8s

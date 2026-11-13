@@ -311,3 +311,49 @@ export type SocialStatus = { available: boolean; connected: boolean; accounts: S
 export type InsightMetrics = { paid_in_minor: number; topups?: number; campaign_spend_minor?: number; charged_minor: number; invoices: number; receipts: number; emails: number; whatsapp: number; social_posts: number; campaigns_sent: number; studio_packs: number; studio_images: number; contacts_added: number }
 export type InsightMonth = { month: string; title: string; summary: string; metrics: InsightMetrics; updated_at: string | null }
 export type ActivityRow = { trace_id: string; event_date: string; message: string; service: string; level: string; tenant_id: string }
+
+/** Creators Home (Offer 35): a creator's channel and the video projects made for it. */
+export type CreatorChannel = {
+  id: string
+  name: string
+  youtube_handle: string
+  niche: string
+  audience: string
+  language: string
+  writing_instructions: string
+  visual_preset: string
+  default_voice: string
+  created_at: string
+  updated_at: string
+}
+
+export type CreatorStageState = 'pending' | 'running' | 'needs_approval' | 'approved' | 'done' | 'failed' | 'skipped'
+
+export type CreatorStage = { key: string; label: string; kind: 'work' | 'approval'; state: CreatorStageState; updated_at: string | null; note: string }
+
+export type CreatorScriptSection = { index: number; heading: string; text: string; words: number }
+
+export type CreatorProject = {
+  id: string
+  channel_id: string
+  title: string
+  topic: string
+  duration_minutes: number
+  style: string
+  audience: string
+  version: number
+  created_by: string
+  created_at: string
+  updated_at: string
+  target_words: number
+  current_stage: string | null
+  stages: CreatorStage[]
+  record: {
+    title?: { chosen?: string; options?: string[]; source?: string }
+    script?: { text: string; sections: CreatorScriptSection[]; words: number; target_words: number; estimated_minutes: number; source: string; updated_at: string }
+    approvals?: Record<string, { by: string; at: string; note: string }>
+    costs?: unknown[]
+  }
+}
+
+export type CreatorEvent = { kind: string; stage: string; actor: string; detail: Record<string, unknown>; created_at: string }

@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 import boto3
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
@@ -22,12 +22,16 @@ from temporalio.service import RPCError, RPCStatusCode
 from assets import QAAssetError, S3QAAssets
 from auth import AuthenticationError, Claims, OIDCAuthenticator, scope_claims
 from money import MoneyServiceError, MoneyServices
-from people import ROLES, CampaignsService, PeopleService, PeopleServiceError
+from people import ROLES, CampaignsService, CreatorsService, PeopleService, PeopleServiceError
 from workflows import TemporalWorkflows
 
 ID_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 ResourceId = Annotated[str, Path(pattern=ID_PATTERN)]
+# Creators Home ids and bodies (svc-creators validates the bodies themselves).
+CreatorId = Annotated[str, Path(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")]
+CreatorStage = Annotated[str, Path(pattern=r"^[a-z_]{2,32}$")]
+CreatorBody = Annotated[dict[str, Any], Body()]
 
 
 # Invisible characters that have no place in names, ids or free text: C0/C1 controls (except tab and line breaks),
@@ -235,6 +239,8 @@ async def lifespan(app: FastAPI):
         app.state.people = PeopleService.from_env()
     if app.state.campaigns is None and app.state.configure_money:
         app.state.campaigns = CampaignsService.from_env()
+    if app.state.creators is None and app.state.configure_money:
+        app.state.creators = CreatorsService.from_env()
     yield
 
 
@@ -307,7 +313,7 @@ class PersonUpdate(BaseModel):
 
 
 def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any = None, money: Any = None,
-               people: Any = None, campaigns: Any = None) -> FastAPI:
+               people: Any = None, campaigns: Any = None, creators: Any = None) -> FastAPI:
     app = FastAPI(title="VolumeOS Orchestrator", version="0.5.0", lifespan=lifespan)
     app.state.workflows = workflows
     app.state.authenticator = authenticator
@@ -315,6 +321,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     app.state.money = money
     app.state.people = people
     app.state.campaigns = campaigns
+    app.state.creators = creators
     app.state.configure_money = workflows is None
 
     @app.middleware("http")
@@ -464,6 +471,67 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     @app.delete("/v1/social")
     async def disconnect_social(claims: Claims = Depends(need("delivery"))):
         return await campaigns_service().disconnect_social(claims.tenant_id)
+
+    # Creators Home (Offer 35) ------------------------------------------------------------------------------------
+    # svc-creators validates every body and keeps each business's data apart; here the person's role is checked and
+    # who they are is passed on for approvals and the project history. Reading needs any role; changing needs delivery.
+    def creators_service() -> Any:
+        if app.state.creators is None:
+            raise error("Creators Home isn't set up on this deployment.", 503, "creators_not_configured")
+        return app.state.creators
+
+    @app.get("/v1/creators/stages")
+    async def creator_stages(claims: Claims = Depends(need("reader"))):
+        return await creators_service().call("GET", "/stages", claims.tenant_id, claims.actor)
+
+    @app.get("/v1/creators/channels")
+    async def creator_channels(claims: Claims = Depends(need("reader"))):
+        return await creators_service().call("GET", "/channels", claims.tenant_id, claims.actor)
+
+    @app.post("/v1/creators/channels", status_code=201)
+    async def create_creator_channel(body: CreatorBody, claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("POST", "/channels", claims.tenant_id, claims.actor, body)
+
+    @app.patch("/v1/creators/channels/{channel_id}")
+    async def update_creator_channel(channel_id: CreatorId, body: CreatorBody, claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("PATCH", f"/channels/{channel_id}", claims.tenant_id, claims.actor, body)
+
+    @app.delete("/v1/creators/channels/{channel_id}")
+    async def delete_creator_channel(channel_id: CreatorId, claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("DELETE", f"/channels/{channel_id}", claims.tenant_id, claims.actor)
+
+    @app.get("/v1/creators/projects")
+    async def creator_projects(channel_id: Annotated[str | None, Query(pattern=r"^[0-9a-f-]{36}$")] = None,
+                               claims: Claims = Depends(need("reader"))):
+        params = {"channel_id": channel_id} if channel_id else None
+        return await creators_service().call("GET", "/projects", claims.tenant_id, claims.actor, params=params)
+
+    @app.post("/v1/creators/projects", status_code=201)
+    async def create_creator_project(body: CreatorBody, claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("POST", "/projects", claims.tenant_id, claims.actor, body)
+
+    @app.get("/v1/creators/projects/{project_id}")
+    async def creator_project(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
+        return await creators_service().call("GET", f"/projects/{project_id}", claims.tenant_id, claims.actor)
+
+    @app.patch("/v1/creators/projects/{project_id}")
+    async def update_creator_project(project_id: CreatorId, body: CreatorBody, claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("PATCH", f"/projects/{project_id}", claims.tenant_id, claims.actor, body)
+
+    @app.put("/v1/creators/projects/{project_id}/{section}")
+    async def set_creator_section(project_id: CreatorId, section: Literal["title", "script"], body: CreatorBody,
+                                  claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("PUT", f"/projects/{project_id}/{section}", claims.tenant_id, claims.actor, body)
+
+    @app.post("/v1/creators/projects/{project_id}/stages/{stage}/{action}")
+    async def creator_stage_action(project_id: CreatorId, stage: CreatorStage, action: Literal["approve", "reopen"],
+                                   body: CreatorBody, claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("POST", f"/projects/{project_id}/stages/{stage}/{action}",
+                                             claims.tenant_id, claims.actor, body)
+
+    @app.get("/v1/creators/projects/{project_id}/events")
+    async def creator_events(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
+        return await creators_service().call("GET", f"/projects/{project_id}/events", claims.tenant_id, claims.actor)
 
     @app.get("/v1/studio/packs")
     async def studio_packs(claims: Claims = Depends(need("reader"))):

@@ -75,6 +75,7 @@ export const ACTIONS = {
   manageContacts: ['delivery'],
   startStudioPack: ['delivery'],
   reviewStudioPack: ['delivery'],
+  manageCreators: ['delivery'],
   startOfferJob: ['delivery'],
   reviewOfferJob: ['delivery', 'analyst'],
   startEngagement: ['delivery'],

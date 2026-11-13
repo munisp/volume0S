@@ -77,8 +77,8 @@ func TestLaunchBundleAndCatalogIsolation(t *testing.T) {
 
 func TestDevelopingMarketCatalogHasTenUnpricedRevenueModules(t *testing.T) {
 	offers, _ := OfferCatalog()
-	if len(offers) != 34 {
-		t.Fatalf("catalog must contain the original eight, ten commerce offers, eight Volume II offers, and eight Volume III offers, got %d", len(offers))
+	if len(offers) != 35 {
+		t.Fatalf("catalog must contain the original eight, ten commerce offers, eight Volume II offers, eight Volume III offers and Creators Home, got %d", len(offers))
 	}
 	modules := map[string]string{}
 	for _, offer := range offers {
@@ -213,4 +213,21 @@ func TestUnpricedOffersEncodeEmptyTierLists(t *testing.T) {
 	if !strings.Contains(string(raw), `"tiers":[]`) {
 		t.Fatal("expected unpriced offers to encode tiers as []")
 	}
+}
+
+func TestCreatorsHomeIsListedButNotSubscribableUntilPriced(t *testing.T) {
+	offers, _ := OfferCatalog()
+	for _, offer := range offers {
+		if offer.ID != "35" {
+			continue
+		}
+		if offer.Name != "Creators Home" || offer.Module != "media.creators" || offer.CommercialStatus != "source-only-unpriced" || len(offer.Tiers) != 0 {
+			t.Fatalf("Creators Home must be listed unpriced: %+v", offer)
+		}
+		if err := ValidateSubscription("35", "starter"); err == nil {
+			t.Fatal("Creators Home became subscribable before it has prices")
+		}
+		return
+	}
+	t.Fatal("Creators Home (35) is missing from the catalogue")
 }

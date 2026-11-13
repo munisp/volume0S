@@ -173,3 +173,44 @@ def test_social_accounts_readable_by_readers_connected_by_delivery():
         assert client.put("/v1/social", headers=auth(), json={"api_key": "bad key with spaces"}).status_code == 400
         assert client.delete("/v1/social", headers=auth()).status_code == 200
     assert campaigns.calls == [("connect", "demo-tenant", "postiz-key-123456"), ("disconnect", "demo-tenant")]
+
+
+class FakeCreators:
+    def __init__(self):
+        self.calls: list[tuple[Any, ...]] = []
+
+    async def call(self, method, path, tenant_id, actor, payload=None, params=None):
+        self.calls.append((method, path, tenant_id, actor, payload, params))
+        return {"ok": True}
+
+
+def creators_client(claims: Claims):
+    creators = FakeCreators()
+    app = create_app(FakeWorkflows(), FakeAuthenticator(claims), FakeQAAssets(), people=FakePeople(), creators=creators)
+    return TestClient(app), creators
+
+
+PROJECT = "3f2b8c1e-1d2a-4c3b-9e8f-0a1b2c3d4e5f"
+
+
+def test_creators_home_reads_for_any_role_changes_for_delivery_and_passes_who_acts():
+    reader = Claims("demo-tenant", "reader-sub", frozenset({"reader"}))
+    delivery = Claims("demo-tenant", "delivery-sub", frozenset({"delivery"}))
+    client, creators = creators_client(reader)
+    with client:
+        assert client.get("/v1/creators/channels", headers=auth()).status_code == 200
+        assert client.get(f"/v1/creators/projects/{PROJECT}", headers=auth()).status_code == 200
+        assert client.post("/v1/creators/channels", headers=auth(), json={"name": "x"}).status_code == 403
+        assert client.post(f"/v1/creators/projects/{PROJECT}/stages/title/approve", headers=auth(), json={"version": 1}).status_code == 403
+    assert [c[0] for c in creators.calls] == ["GET", "GET"]
+    client, creators = creators_client(delivery)
+    with client:
+        assert client.post("/v1/creators/channels", headers=auth(), json={"name": "Money Files Decoded"}).status_code == 201
+        assert client.put(f"/v1/creators/projects/{PROJECT}/script", headers=auth(), json={"text": "x", "version": 1}).status_code == 200
+        assert client.post(f"/v1/creators/projects/{PROJECT}/stages/title/approve", headers=auth(), json={"version": 1}).status_code == 200
+        # Only title and script can be written directly, ids must be ids, actions are approve or reopen.
+        assert client.put(f"/v1/creators/projects/{PROJECT}/record", headers=auth(), json={}).status_code in (400, 404, 405, 422)
+        assert client.get("/v1/creators/projects/not-an-id", headers=auth()).status_code in (400, 422)
+        assert client.post(f"/v1/creators/projects/{PROJECT}/stages/title/delete", headers=auth(), json={}).status_code in (400, 422)
+    assert all(c[2] == "demo-tenant" and c[3] == "delivery-sub" for c in creators.calls)
+    assert creators.calls[-1][:2] == ("POST", f"/projects/{PROJECT}/stages/title/approve")

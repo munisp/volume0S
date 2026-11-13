@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react'
 import { matchPath, Navigate, Route, Routes, useLocation } from 'react-router'
 import {
   BookOpen, Building2, ClipboardCheck, Gauge, Inbox, Landmark, Layers3, LineChart, Loader2, MessagesSquare,
-  Megaphone, Image as ImageIcon, PackageCheck, Settings2, UserRound, Wallet, Workflow, Users,
+  Megaphone, Image as ImageIcon, PackageCheck, Settings2, UserRound, Wallet, Workflow, Users, Clapperboard,
 } from 'lucide-react'
 import { SessionProvider } from './state/session'
 import { useSession } from './state/session-context'
@@ -19,6 +19,7 @@ import { ClientPage } from './pages/ClientPage'
 import { ClientsPage } from './pages/ClientsPage'
 import { CampaignsPage } from './pages/CampaignsPage'
 import { StudioPage } from './pages/StudioPage'
+import { CreatorsPage } from './pages/CreatorsPage'
 import { EngagementsPage, FinancePage, FrontDeskPage, OfferJobsPage } from './pages/ServicePages'
 import { AccountPage, AdminPage, ForbiddenPage, IntelligencePage, NotFoundPage } from './pages/AdminPages'
 import { ClientHomePage, PaymentReturnPage, ProfilePage, WalletPage } from './pages/ClientPages'
@@ -36,6 +37,8 @@ const OPERATOR_ROUTES: RouteDef[] = [
   { path: '/services/campaigns/:id', title: 'Campaign', section: 'Campaigns', sectionTo: '/services/campaigns', area: 'services', element: <CampaignsPage /> },
   { path: '/services/studio', title: 'Shopfront Studio', section: 'Services', area: 'services', element: <StudioPage /> },
   { path: '/services/studio/:id', title: 'Studio pack', section: 'Shopfront Studio', sectionTo: '/services/studio', area: 'services', element: <StudioPage /> },
+  { path: '/services/creators', title: 'Creators Home', section: 'Services', area: 'services', element: <CreatorsPage /> },
+  { path: '/services/creators/:id', title: 'Video project', section: 'Creators Home', sectionTo: '/services/creators', area: 'services', element: <CreatorsPage /> },
   { path: '/services/offer-jobs', title: 'Offer jobs', section: 'Services', area: 'services', element: <OfferJobsPage /> },
   { path: '/services/offer-jobs/:id', title: 'Offer job', section: 'Offer jobs', sectionTo: '/services/offer-jobs', area: 'services', element: <OfferJobsPage /> },
   { path: '/services/front-desk', title: 'Front desk', section: 'Services', area: 'services', element: <FrontDeskPage /> },
@@ -113,6 +116,7 @@ function OperatorApp() {
     { label: 'Services', items: [
       { to: '/services/campaigns', label: 'Campaigns', icon: Megaphone },
       { to: '/services/studio', label: 'Shopfront Studio', icon: ImageIcon },
+      { to: '/services/creators', label: 'Creators Home', icon: Clapperboard },
       { to: '/services/offer-jobs', label: 'Offer jobs', icon: PackageCheck },
       { to: '/services/front-desk', label: 'Front desk', icon: MessagesSquare },
     ] },

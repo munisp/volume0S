@@ -51,6 +51,7 @@ spec:
             - name: PROVISIONING_URL
               valueFrom: {configMapKeyRef: {name: volumeos-provisioning, key: provisioning-url, optional: true}}
             - {name: CAMPAIGNS_URL, value: http://svc-campaigns.core.svc.cluster.local}
+            - {name: CREATORS_URL, value: http://svc-creators.core.svc.cluster.local}
           envFrom:
             - secretRef: {name: svc-orchestrator}
           readinessProbe:

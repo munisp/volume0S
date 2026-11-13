@@ -25,6 +25,7 @@ const DELIVERY: Record<string, { label: string; to: string }> = {
   '03': { label: 'Offer jobs', to: '/services/offer-jobs' }, '04': { label: 'Front desk', to: '/services/front-desk' },
   '05': { label: 'Offer jobs', to: '/services/offer-jobs' }, '06': { label: 'Shopfront Studio', to: '/services/studio' },
   '07': { label: 'Offer jobs', to: '/services/offer-jobs' }, '08': { label: 'Offer jobs', to: '/services/offer-jobs' },
+  '35': { label: 'Creators Home', to: '/services/creators' },
 }
 
 function entitlement(key: string, value: number) {

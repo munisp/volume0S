@@ -4,6 +4,7 @@ import type {
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace, TenantSummary, Person,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
+  CreatorChannel, CreatorEvent, CreatorProject,
 } from './types'
 import { plainError } from './messages.ts'
 
@@ -152,6 +153,42 @@ export class VolumeOSApi {
       method: 'POST', body: { approval_id: approvalId },
     })
   }
+
+  // Creators Home (Offer 35) ---------------------------------------------------------------------------------
+  creatorChannels() { return this.request<{ channels: CreatorChannel[] }>(this.orchestratorUrl, '/v1/creators/channels') }
+
+  createCreatorChannel(input: Partial<CreatorChannel>) {
+    return this.request<CreatorChannel>(this.orchestratorUrl, '/v1/creators/channels', { method: 'POST', body: input })
+  }
+
+  updateCreatorChannel(id: string, input: Partial<CreatorChannel>) {
+    return this.request<CreatorChannel>(this.orchestratorUrl, `/v1/creators/channels/${encodeURIComponent(id)}`, { method: 'PATCH', body: input })
+  }
+
+  creatorProjects(channelId?: string) {
+    const query = channelId ? `?channel_id=${encodeURIComponent(channelId)}` : ''
+    return this.request<{ projects: CreatorProject[] }>(this.orchestratorUrl, `/v1/creators/projects${query}`)
+  }
+
+  createCreatorProject(input: { channel_id: string; topic: string; title?: string; duration_minutes: number; style?: string; audience?: string }) {
+    return this.request<CreatorProject>(this.orchestratorUrl, '/v1/creators/projects', { method: 'POST', body: input })
+  }
+
+  creatorProject(id: string) { return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}`) }
+
+  setCreatorTitle(id: string, chosen: string, options: string[], version: number) {
+    return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/title`, { method: 'PUT', body: { chosen, options, version } })
+  }
+
+  setCreatorScript(id: string, text: string, version: number) {
+    return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/script`, { method: 'PUT', body: { text, version } })
+  }
+
+  creatorStage(id: string, stage: string, action: 'approve' | 'reopen', note: string, version: number) {
+    return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/stages/${encodeURIComponent(stage)}/${action}`, { method: 'POST', body: { note, version } })
+  }
+
+  creatorEvents(id: string) { return this.request<{ events: CreatorEvent[] }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/events`) }
 
   studioPacks() {
     return this.request<{ packs: StudioSnapshot[] }>(this.orchestratorUrl, '/v1/studio/packs')

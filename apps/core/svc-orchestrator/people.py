@@ -44,8 +44,10 @@ class PeopleService:
         return await self._request("PATCH", f"/v1/people/{person_id}", tenant_id, payload)
 
     async def _request(self, method: str, path: str, tenant_id: str, payload: dict[str, Any] | None = None,
-                       params: dict[str, Any] | None = None) -> dict[str, Any]:
+                       params: dict[str, Any] | None = None, actor: str = "") -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self.service_token}", "X-VolumeOS-Tenant": tenant_id, "Accept": "application/json"}
+        if actor:
+            headers["X-VolumeOS-Actor"] = actor  # who is acting, for approvals and the history
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
                 response = await client.request(method, self.base_url + path, json=payload, headers=headers, params=params)
@@ -98,3 +100,17 @@ class CampaignsService(PeopleService):
 
     async def campaign(self, tenant_id: str, campaign_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/campaigns/{campaign_id}", tenant_id)
+
+
+class CreatorsService(PeopleService):
+    """svc-creators (Offer 35 Creators Home): channels, video projects and their production stages."""
+    name = "Creators Home"
+
+    @classmethod
+    def from_env(cls) -> "CreatorsService | None":
+        url = os.environ.get("CREATORS_URL", "")
+        return cls(url, os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")) if url else None
+
+    async def call(self, method: str, path: str, tenant_id: str, actor: str, payload: dict[str, Any] | None = None,
+                   params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await self._request(method, "/v1/creators" + path, tenant_id, payload, params, actor)

@@ -8,7 +8,7 @@ import { Confirm, Empty, Field, Modal, PageHead, Panel, RoleNote, Status, Submit
 const ACTION_LABEL: Record<Action, string> = {
   createTenant: 'Create the business record', managePeople: 'Add people and change their roles', transitionTenant: 'Change business status (incl. offboarding)', suspendOutbound: 'Suspend or restore outbound messages',
   updateSuppression: 'Suppress or restore a recipient', createWorkspace: 'Create delivery workspaces', subscribe: 'Subscribe the business to an offer',
-  startCampaign: 'Start campaigns', approveCampaign: 'Approve campaigns', manageContacts: 'Manage campaign contacts', startStudioPack: 'Start Studio packs', reviewStudioPack: 'QA Studio images',
+  startCampaign: 'Start campaigns', approveCampaign: 'Approve campaigns', manageContacts: 'Manage campaign contacts', startStudioPack: 'Start Studio packs', reviewStudioPack: 'QA Studio images', manageCreators: 'Run Creators Home videos',
   startOfferJob: 'Start offer jobs', reviewOfferJob: 'Review offer-job artifacts and front-desk replies', startEngagement: 'Start engagements', reviewEngagement: 'Approve or reject engagement plans',
   topUp: 'Fund the prepaid balance', startBillingCycle: 'Start billing cycles', recoverBilling: 'Resume a paused billing cycle', financeReports: 'Finance exports and partner terms', read: 'See this business\'s work and records',
 }
