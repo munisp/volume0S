@@ -1,0 +1,13 @@
+# Creators Home models on ghana. Ports are published on the Tailscale address only.
+services:
+  creators-tts:
+    build: .
+    image: creators-tts:1
+    restart: unless-stopped
+    env_file: /home/newwave-dgx/creators-home/secrets.env
+    ports: ["100.88.112.5:8880:8880"]
+    volumes: ["/home/newwave-dgx/hf-cache:/models"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]

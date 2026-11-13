@@ -529,6 +529,30 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return await creators_service().call("POST", f"/projects/{project_id}/stages/{stage}/{action}",
                                              claims.tenant_id, claims.actor, body)
 
+    @app.post("/v1/creators/projects/{project_id}/jobs", status_code=202)
+    async def start_creator_job(project_id: CreatorId, body: CreatorBody, claims: Claims = Depends(need("delivery"))):
+        """Writing the script or voicing the approved script: started by a person, named in the history."""
+        return await creators_service().call("POST", f"/projects/{project_id}/jobs", claims.tenant_id, claims.actor, body)
+
+    @app.get("/v1/creators/projects/{project_id}/jobs")
+    async def creator_jobs(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
+        return await creators_service().call("GET", f"/projects/{project_id}/jobs", claims.tenant_id, claims.actor)
+
+    @app.get("/v1/creators/voices")
+    async def creator_voices(claims: Claims = Depends(need("reader"))):
+        return await creators_service().call("GET", "/voices", claims.tenant_id, claims.actor)
+
+    @app.post("/v1/creators/voices/preview")
+    async def creator_voice_preview(body: CreatorBody, claims: Claims = Depends(need("delivery"))):
+        data, media, _ = await creators_service().raw("POST", "/voices/preview", claims.tenant_id, claims.actor, body)
+        return Response(data, media_type=media)
+
+    @app.get("/v1/creators/projects/{project_id}/audio/{name}")
+    async def creator_audio(project_id: CreatorId, name: Annotated[str, Path(pattern=r"^(narration|chapter-\d{2})$")],
+                            claims: Claims = Depends(need("reader"))):
+        data, media, disposition = await creators_service().raw("GET", f"/projects/{project_id}/audio/{name}", claims.tenant_id, claims.actor)
+        return Response(data, media_type=media, headers={"Content-Disposition": disposition} if disposition else None)
+
     @app.get("/v1/creators/projects/{project_id}/events")
     async def creator_events(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
         return await creators_service().call("GET", f"/projects/{project_id}/events", claims.tenant_id, claims.actor)

@@ -144,3 +144,41 @@ def script_record(text: str, duration_minutes: int, source: str) -> dict[str, An
         "text": text, "sections": sections, "words": words, "target_words": target,
         "estimated_minutes": round(words / WORDS_PER_MINUTE, 1), "source": source, "updated_at": now(),
     }
+
+
+# Jobs: work the creators worker does for a stage. A job can only start when the stages before its stage are finished
+# (an approved title before the script; an approved script before the voice), and starting one sends everything
+# built on its stage back to not started.
+JOB_STAGE = {"script": "script", "voiceover": "voiceover"}
+JOB_NEEDS = {"script": "title", "voiceover": "script_approval"}
+VOICE_SPEEDS = (0.6, 1.6)
+
+
+def start_job(stages: dict[str, dict[str, Any]], kind: str) -> list[str]:
+    if kind not in JOB_STAGE:
+        raise ProjectError(f"unknown job {kind!r}", status=400)
+    stage, needs = JOB_STAGE[kind], JOB_NEEDS[kind]
+    if stages[needs]["state"] != "approved":
+        raise ProjectError(f"approve the {needs.replace('_approval', '').replace('_', ' ')} first", "earlier_stage_open")
+    if stages[stage]["state"] == "running":
+        raise ProjectError(f"the {kind} is already being made", "job_running")
+    if kind == "script" and stages["script_approval"]["state"] == "approved":
+        raise ProjectError("the script is approved; reopen it to write a new one", "invalid_state")
+    reset = reset_after(stages, stage)
+    set_state(stages, stage, "running", "queued")
+    return reset
+
+
+def finish_job(stages: dict[str, dict[str, Any]], kind: str, ok: bool, note: str) -> None:
+    stage = JOB_STAGE[kind]
+    if not ok:
+        set_state(stages, stage, "failed", note)
+        return
+    set_state(stages, stage, "done", note)
+    if kind == "script":
+        set_state(stages, "script_approval", "needs_approval")
+
+
+def script_outline_size(duration_minutes: int) -> int:
+    """How many chapters a script of this length gets: one roughly every 2.5 minutes, at least 3."""
+    return max(3, min(18, round(duration_minutes / 2.5)))

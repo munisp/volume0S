@@ -76,6 +76,34 @@ BEGIN
                        'WITH CHECK (tenant_id = current_setting(''volumeos.tenant_id'', true))', t);
     END LOOP;
 END $$;
+"""), ("002_jobs", """
+CREATE TABLE IF NOT EXISTS creator_jobs (
+    id uuid PRIMARY KEY,
+    tenant_id text NOT NULL,
+    project_id uuid NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('script','voiceover')),
+    params jsonb NOT NULL DEFAULT '{}'::jsonb,
+    status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed')),
+    attempts integer NOT NULL DEFAULT 0,
+    lease_until timestamptz,
+    progress text NOT NULL DEFAULT '',
+    error text NOT NULL DEFAULT '',
+    created_by text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    finished_at timestamptz,
+    FOREIGN KEY (tenant_id, project_id) REFERENCES creator_projects (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS creator_jobs_project ON creator_jobs (tenant_id, project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS creator_jobs_queue ON creator_jobs (created_at) WHERE status IN ('queued','running');
+CREATE UNIQUE INDEX IF NOT EXISTS creator_jobs_one_active ON creator_jobs (tenant_id, project_id, kind) WHERE status IN ('queued','running');
+ALTER TABLE creator_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE creator_jobs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON creator_jobs;
+-- A business sees its own jobs; the worker, while claiming, sees the queue of every business (volumeos.worker).
+CREATE POLICY tenant_isolation ON creator_jobs
+    USING (tenant_id = current_setting('volumeos.tenant_id', true) OR current_setting('volumeos.worker', true) = 'on')
+    WITH CHECK (tenant_id = current_setting('volumeos.tenant_id', true) OR current_setting('volumeos.worker', true) = 'on');
 """)]
 
 CHANNEL_FIELDS = ("name", "youtube_handle", "niche", "audience", "language", "writing_instructions", "visual_preset",
@@ -235,6 +263,71 @@ class PostgresCreatorStore:
                  "created_at": _iso(row["created_at"])} for row in rows]
 
 
+    # Jobs -------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _job(row: asyncpg.Record) -> dict[str, Any]:
+        return {"id": str(row["id"]), "tenant_id": row["tenant_id"], "project_id": str(row["project_id"]), "kind": row["kind"],
+                "params": _json(row["params"]), "status": row["status"], "attempts": row["attempts"],
+                "progress": row["progress"], "error": row["error"], "created_by": row["created_by"],
+                "created_at": _iso(row["created_at"]), "started_at": _iso(row["started_at"]), "finished_at": _iso(row["finished_at"])}
+
+    async def start_job(self, tenant: str, project: dict[str, Any], expected_version: int, kind: str,
+                        params: dict[str, Any], actor: str, event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Saves the project (its stage now running) and queues the job in one transaction."""
+        async with self.tenant_tx(tenant) as tx:
+            if await tx.fetchval("SELECT 1 FROM creator_jobs WHERE project_id=$1 AND kind=$2 AND status IN ('queued','running')",
+                                 uuid.UUID(project["id"]), kind):
+                raise KeyError("this is already being made")
+            row = await tx.fetchrow(
+                "UPDATE creator_projects SET stages=$3::jsonb, record=$4::jsonb, version=version+1, updated_at=now()"
+                " WHERE id=$1 AND version=$2 RETURNING *", uuid.UUID(project["id"]), expected_version,
+                json.dumps(project["stages"]), json.dumps(project["record"]))
+            if row is None:
+                raise LookupError("the project changed since it was read")
+            job = await tx.fetchrow("INSERT INTO creator_jobs (id, tenant_id, project_id, kind, params, created_by)"
+                                    " VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING *", uuid.uuid4(), tenant,
+                                    uuid.UUID(project["id"]), kind, json.dumps(params), actor)
+            await tx.execute("INSERT INTO creator_events (tenant_id, project_id, kind, stage, actor, detail) VALUES ($1,$2,$3,$4,$5,$6::jsonb)",
+                             tenant, row["id"], event["kind"], event.get("stage", ""), actor, json.dumps(event.get("detail", {})))
+        return self._project(row), self._job(job)
+
+    async def jobs(self, tenant: str, project_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        async with self.tenant_tx(tenant) as tx:
+            rows = await tx.fetch("SELECT * FROM creator_jobs WHERE project_id=$1 ORDER BY created_at DESC LIMIT $2",
+                                  uuid.UUID(project_id), limit)
+        return [self._job(row) for row in rows]
+
+    async def claim_job(self, lease_minutes: int = 45, max_attempts: int = 3) -> dict[str, Any] | None:
+        """The oldest queued job (or one whose worker stopped renewing its lease), for this worker alone."""
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute("SELECT set_config('volumeos.worker', 'on', true)")
+                row = await connection.fetchrow(
+                    "UPDATE creator_jobs SET status='running', attempts=attempts+1, started_at=coalesce(started_at, now()),"
+                    " lease_until=now() + make_interval(mins => $1) WHERE id = (SELECT id FROM creator_jobs"
+                    " WHERE (status='queued' OR (status='running' AND lease_until < now())) AND attempts < $2"
+                    " ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *", lease_minutes, max_attempts)
+        return self._job(row) if row else None
+
+    async def abandoned_jobs(self, max_attempts: int = 3) -> list[dict[str, Any]]:
+        """Jobs whose lease ran out on their last allowed attempt: the worker marks them failed."""
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute("SELECT set_config('volumeos.worker', 'on', true)")
+                rows = await connection.fetch("SELECT * FROM creator_jobs WHERE status='running' AND lease_until < now() AND attempts >= $1", max_attempts)
+        return [self._job(row) for row in rows]
+
+    async def job_progress(self, tenant: str, job_id: str, progress: str, lease_minutes: int = 45) -> None:
+        async with self.tenant_tx(tenant) as tx:
+            await tx.execute("UPDATE creator_jobs SET progress=$2, lease_until=now() + make_interval(mins => $3) WHERE id=$1",
+                             uuid.UUID(job_id), progress[:300], lease_minutes)
+
+    async def finish_job(self, tenant: str, job_id: str, ok: bool, error: str = "") -> None:
+        async with self.tenant_tx(tenant) as tx:
+            await tx.execute("UPDATE creator_jobs SET status=$2, error=$3, finished_at=now(), lease_until=NULL WHERE id=$1",
+                             uuid.UUID(job_id), "done" if ok else "failed", error[:1000])
+
+
 class InMemoryCreatorStore:
     """The same contract for tests: every lookup is by tenant, as the database's row security enforces."""
 
@@ -242,6 +335,7 @@ class InMemoryCreatorStore:
         self.channel_rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.project_rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.event_rows: list[dict[str, Any]] = []
+        self.job_rows: dict[str, dict[str, Any]] = {}
 
     async def ready(self) -> None:
         return None
@@ -300,3 +394,34 @@ class InMemoryCreatorStore:
     async def events(self, tenant, project_id, limit=100):
         rows = [e for e in self.event_rows if e["tenant"] == tenant and e["project_id"] == project_id]
         return [{key: e[key] for key in ("kind", "stage", "actor", "detail", "created_at")} for e in reversed(rows)][:limit]
+
+    async def start_job(self, tenant, project, expected_version, kind, params, actor, event):
+        if any(j["tenant_id"] == tenant and j["project_id"] == project["id"] and j["kind"] == kind and j["status"] in ("queued", "running")
+               for j in self.job_rows.values()):
+            raise KeyError("this is already being made")
+        saved = await self.save_project(tenant, project, expected_version, event | {"actor": actor})
+        job = {"id": str(uuid.uuid4()), "tenant_id": tenant, "project_id": project["id"], "kind": kind, "params": params,
+               "status": "queued", "attempts": 0, "progress": "", "error": "", "created_by": actor, "created_at": now(),
+               "started_at": None, "finished_at": None}
+        self.job_rows[job["id"]] = job
+        return saved, copy.deepcopy(job)
+
+    async def jobs(self, tenant, project_id, limit=20):
+        rows = [copy.deepcopy(j) for j in self.job_rows.values() if j["tenant_id"] == tenant and j["project_id"] == project_id]
+        return sorted(rows, key=lambda j: j["created_at"], reverse=True)[:limit]
+
+    async def claim_job(self, lease_minutes=45, max_attempts=3):
+        for job in sorted(self.job_rows.values(), key=lambda j: j["created_at"]):
+            if job["status"] == "queued" and job["attempts"] < max_attempts:
+                job.update(status="running", attempts=job["attempts"] + 1, started_at=now())
+                return copy.deepcopy(job)
+        return None
+
+    async def abandoned_jobs(self, max_attempts=3):
+        return []
+
+    async def job_progress(self, tenant, job_id, progress, lease_minutes=45):
+        self.job_rows[job_id]["progress"] = progress
+
+    async def finish_job(self, tenant, job_id, ok, error=""):
+        self.job_rows[job_id].update(status="done" if ok else "failed", error=error, finished_at=now())

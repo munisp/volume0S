@@ -352,8 +352,15 @@ export type CreatorProject = {
     title?: { chosen?: string; options?: string[]; source?: string }
     script?: { text: string; sections: CreatorScriptSection[]; words: number; target_words: number; estimated_minutes: number; source: string; updated_at: string }
     approvals?: Record<string, { by: string; at: string; note: string }>
+    voiceover?: { voice: string; speed: number; script_sha256: string; total_seconds: number; provider: string; updated_at: string;
+      sections: { index: number; heading: string; key: string; seconds: number }[] }
     costs?: unknown[]
   }
 }
 
 export type CreatorEvent = { kind: string; stage: string; actor: string; detail: Record<string, unknown>; created_at: string }
+
+export type CreatorJob = { id: string; kind: 'script' | 'voiceover'; status: 'queued' | 'running' | 'done' | 'failed'; progress: string; error: string;
+  params: Record<string, unknown>; attempts: number; created_at: string; started_at: string | null; finished_at: string | null }
+
+export type CreatorVoice = { id: string; name: string; gender: 'male' | 'female'; accent: string }

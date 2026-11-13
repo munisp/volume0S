@@ -214,3 +214,28 @@ def test_creators_home_reads_for_any_role_changes_for_delivery_and_passes_who_ac
         assert client.post(f"/v1/creators/projects/{PROJECT}/stages/title/delete", headers=auth(), json={}).status_code in (400, 422)
     assert all(c[2] == "demo-tenant" and c[3] == "delivery-sub" for c in creators.calls)
     assert creators.calls[-1][:2] == ("POST", f"/projects/{PROJECT}/stages/title/approve")
+
+
+class FakeCreatorsAudio(FakeCreators):
+    async def raw(self, method, path, tenant_id, actor, payload=None):
+        self.calls.append((method, path, tenant_id, actor, payload, None))
+        return b"RIFF....WAVE", "audio/wav", 'attachment; filename="x.wav"'
+
+
+def test_creators_jobs_voices_and_audio_follow_roles():
+    reader = Claims("demo-tenant", "reader-sub", frozenset({"reader"}))
+    delivery = Claims("demo-tenant", "delivery-sub", frozenset({"delivery"}))
+    creators = FakeCreatorsAudio()
+    with TestClient(create_app(FakeWorkflows(), FakeAuthenticator(reader), FakeQAAssets(), people=FakePeople(), creators=creators)) as client:
+        assert client.get("/v1/creators/voices", headers=auth()).status_code == 200
+        r = client.get(f"/v1/creators/projects/{PROJECT}/audio/chapter-01", headers=auth())
+        assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content.startswith(b"RIFF")
+        assert client.get(f"/v1/creators/projects/{PROJECT}/audio/../../etc", headers=auth()).status_code in (400, 404, 422)
+        assert client.post(f"/v1/creators/projects/{PROJECT}/jobs", headers=auth(), json={"kind": "script", "version": 1}).status_code == 403
+        assert client.post("/v1/creators/voices/preview", headers=auth(), json={"voice": "af_heart"}).status_code == 403
+    creators = FakeCreatorsAudio()
+    with TestClient(create_app(FakeWorkflows(), FakeAuthenticator(delivery), FakeQAAssets(), people=FakePeople(), creators=creators)) as client:
+        assert client.post(f"/v1/creators/projects/{PROJECT}/jobs", headers=auth(), json={"kind": "script", "version": 1}).status_code == 202
+        assert client.post("/v1/creators/voices/preview", headers=auth(), json={"voice": "af_heart"}).status_code == 200
+    assert [c[1] for c in creators.calls] == [f"/projects/{PROJECT}/jobs", "/voices/preview"]
+    assert all(c[3] == "delivery-sub" for c in creators.calls)

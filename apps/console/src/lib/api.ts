@@ -4,7 +4,7 @@ import type {
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace, TenantSummary, Person,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
-  CreatorChannel, CreatorEvent, CreatorProject,
+  CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorVoice,
 } from './types'
 import { plainError } from './messages.ts'
 
@@ -188,6 +188,18 @@ export class VolumeOSApi {
     return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/stages/${encodeURIComponent(stage)}/${action}`, { method: 'POST', body: { note, version } })
   }
 
+  startCreatorJob(id: string, input: { kind: 'script' | 'voiceover'; voice?: string; speed?: number; version: number }) {
+    return this.request<{ project: CreatorProject; job: CreatorJob }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/jobs`, { method: 'POST', body: input })
+  }
+
+  creatorJobs(id: string) { return this.request<{ jobs: CreatorJob[] }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/jobs`) }
+
+  creatorVoices() { return this.request<{ voices: CreatorVoice[] }>(this.orchestratorUrl, '/v1/creators/voices') }
+
+  previewCreatorVoice(voice: string, speed: number, text = '') { return this.audioUrl('/v1/creators/voices/preview', { voice, speed, text }) }
+
+  creatorAudio(id: string, name: string) { return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/audio/${name}`) }
+
   creatorEvents(id: string) { return this.request<{ events: CreatorEvent[] }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/events`) }
 
   studioPacks() {
@@ -211,6 +223,25 @@ export class VolumeOSApi {
     if (this.actingTenant) headers['X-VolumeOS-Tenant'] = this.actingTenant
     const response = await fetch(this.orchestratorUrl + path, { headers, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(30000) })
     if (!response.ok) throw new ApiError(`The file couldn't be loaded (${response.status}).`, response.status)
+    return URL.createObjectURL(await response.blob())
+  }
+
+  /** Audio fetched with the user's token (voice previews, narration): a local URL for an <audio> player. */
+  async audioUrl(path: string, body?: unknown): Promise<string> {
+    const accessToken = await this.token()
+    if (!accessToken) throw new ApiError('Sign in to continue.', 401)
+    const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` }
+    if (this.actingTenant) headers['X-VolumeOS-Tenant'] = this.actingTenant
+    if (body !== undefined) headers['Content-Type'] = 'application/json'
+    const response = await fetch(this.orchestratorUrl + path, {
+      method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body),
+      headers, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(180000),
+    })
+    if (!response.ok) {
+      let message = `The audio couldn't be loaded (${response.status}).`
+      try { const detail = (await response.json())?.error?.message; if (detail) message = detail } catch { /* not JSON */ }
+      throw new ApiError(message, response.status)
+    }
     return URL.createObjectURL(await response.blob())
   }
 

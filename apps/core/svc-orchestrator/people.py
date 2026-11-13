@@ -114,3 +114,25 @@ class CreatorsService(PeopleService):
     async def call(self, method: str, path: str, tenant_id: str, actor: str, payload: dict[str, Any] | None = None,
                    params: dict[str, Any] | None = None) -> dict[str, Any]:
         return await self._request(method, "/v1/creators" + path, tenant_id, payload, params, actor)
+
+    async def raw(self, method: str, path: str, tenant_id: str, actor: str,
+                  payload: dict[str, Any] | None = None) -> tuple[bytes, str, str]:
+        """Audio from svc-creators (voice previews, narration): the bytes, their type and the download name."""
+        headers = {"Authorization": f"Bearer {self.service_token}", "X-VolumeOS-Tenant": tenant_id}
+        if actor:
+            headers["X-VolumeOS-Actor"] = actor
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+                response = await client.request(method, self.base_url + "/v1/creators" + path, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            raise PeopleServiceError(f"{self.name} is unavailable.") from exc
+        if response.is_error:
+            try:
+                detail = response.json().get("error") or {}
+            except ValueError:
+                detail = {}
+            status = response.status_code if response.status_code in {400, 404, 409, 422} else 503
+            raise PeopleServiceError(str(detail.get("message") or f"{self.name} request failed."), status,
+                                     str(detail.get("code") or "creators_error"))
+        return response.content, response.headers.get("content-type", "application/octet-stream"), \
+            response.headers.get("content-disposition", "")

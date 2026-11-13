@@ -17,11 +17,12 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import model
 from model import ProjectError
+from providers import AudioStore, ProviderError, VoiceService
 from store import PostgresCreatorStore
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
@@ -103,6 +104,19 @@ class ScriptInput(InputModel):
     version: int = Field(ge=1)
 
 
+class JobInput(InputModel):
+    kind: Literal["script", "voiceover"]
+    voice: str = Field(default="", max_length=40, pattern=r"^([a-z]{2}_[a-z]{2,20})?$")
+    speed: float = Field(default=1.0, ge=0.6, le=1.6)
+    version: int = Field(ge=1)
+
+
+class PreviewInput(InputModel):
+    voice: str = Field(pattern=r"^[a-z]{2}_[a-z]{2,20}$")
+    text: str = Field(default="", max_length=400)
+    speed: float = Field(default=1.0, ge=0.6, le=1.6)
+
+
 class StageAction(InputModel):
     note: str = Field(default="", max_length=1000)
     version: int = Field(ge=1)
@@ -119,17 +133,21 @@ def view(project: dict[str, Any]) -> dict[str, Any]:
                       "target_words": model.target_words(project["duration_minutes"])}
 
 
-def create_app(store: Any = None) -> FastAPI:
+def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app.state.store is None:
             app.state.store = await PostgresCreatorStore.connect(os.environ["DATABASE_URL"])
+        if app.state.voices is None:
+            app.state.voices = VoiceService.from_env()
+        if app.state.audio is None:
+            app.state.audio = AudioStore.from_env()
         yield
         if hasattr(app.state.store, "close"):
             await app.state.store.close()
 
     app = FastAPI(title="VolumeOS Creators Home", lifespan=lifespan)
-    app.state.store = store
+    app.state.store, app.state.voices, app.state.audio = store, voices, audio
     token = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
 
     def caller(request: Request) -> tuple[str, str] | JSONResponse:
@@ -142,6 +160,10 @@ def create_app(store: Any = None) -> FastAPI:
             return error(400, "invalid_tenant", "a business is required")
         actor = request.headers.get("x-volumeos-actor", "")
         return tenant, actor if ACTOR.fullmatch(actor) else ""
+
+    @app.exception_handler(ProviderError)
+    async def provider_error(_request: Request, exc: ProviderError):
+        return error(503, "provider_unavailable", str(exc))
 
     @app.exception_handler(ProjectError)
     async def project_error(_request: Request, exc: ProjectError):
@@ -344,6 +366,84 @@ def create_app(store: Any = None) -> FastAPI:
         project["record"].get("approvals", {}).pop(stage, None)
         return await save(tenant, project, body.version, {"kind": "reopened", "stage": stage, "actor": actor,
                                                           "detail": {"reason": body.note, "reset": reset}})
+
+    # Jobs (the creators worker makes these) ---------------------------------------------------------------------
+    @app.post("/v1/creators/projects/{project_id}/jobs", status_code=202)
+    async def start_job(project_id: str, body: JobInput, request: Request):
+        """Starts writing the script, or voicing the approved script with the chosen voice."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        tenant, actor = who
+        if not actor:
+            return error(400, "actor_required", "jobs must name the person starting them")
+        project = await load(tenant, project_id)
+        params: dict[str, Any] = {}
+        if body.kind == "voiceover":
+            if not body.voice:
+                return error(400, "invalid_request", "choose a voice")
+            if app.state.voices is None:
+                return error(503, "voice_not_configured", "the voice service isn't set up on this deployment")
+            if body.voice not in {v["id"] for v in await app.state.voices.voices()}:
+                return error(400, "invalid_request", "unknown voice")
+            params = {"voice": body.voice, "speed": body.speed}
+        if project["version"] != body.version:
+            raise ProjectError("the project changed since you opened it; reload it first", "stale_version")
+        reset = model.start_job(project["stages"], body.kind)
+        try:
+            saved, job = await app.state.store.start_job(tenant, project, body.version, body.kind, params, actor, {
+                "kind": "job_started", "stage": model.JOB_STAGE[body.kind], "detail": {"job": body.kind, **params, "reset": reset}})
+        except KeyError:
+            return error(409, "job_running", f"the {body.kind} is already being made")
+        except LookupError as exc:
+            raise ProjectError("the project changed since you opened it; reload it first", "stale_version") from exc
+        return {"project": view(saved), "job": job}
+
+    @app.get("/v1/creators/projects/{project_id}/jobs")
+    async def jobs(project_id: str, request: Request):
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        await load(who[0], project_id)
+        return {"jobs": await app.state.store.jobs(who[0], project_id)}
+
+    # Voices and audio -------------------------------------------------------------------------------------------
+    @app.get("/v1/creators/voices")
+    async def voices(request: Request):
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        if app.state.voices is None:
+            return error(503, "voice_not_configured", "the voice service isn't set up on this deployment")
+        return {"voices": await app.state.voices.voices()}
+
+    @app.post("/v1/creators/voices/preview")
+    async def preview(body: PreviewInput, request: Request):
+        """A short sample of a voice (audition before choosing); nothing is stored."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        if app.state.voices is None:
+            return error(503, "voice_not_configured", "the voice service isn't set up on this deployment")
+        text = body.text.strip() or "Welcome back. Today we look at something most people never notice, and why it matters to you."
+        return Response(await app.state.voices.speak(text, body.voice, body.speed), media_type="audio/wav")
+
+    @app.get("/v1/creators/projects/{project_id}/audio/{name}")
+    async def audio(project_id: str, name: str, request: Request):
+        """The narration (name 'narration') or one chapter's voiceover ('chapter-NN') of this project's current voice."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        project = await load(who[0], project_id)
+        voice = project["record"].get("voiceover") or {}
+        if name == "narration":
+            key = voice.get("full_key")
+        else:
+            key = next((s["key"] for s in voice.get("sections", []) if f"chapter-{s['index']:02d}" == name), None)
+        if not key or app.state.audio is None or not key.startswith(f"{who[0]}/creators/{project_id}/"):
+            return error(404, "not_found", "no such audio for this project")
+        return Response(await app.state.audio.get(key), media_type="audio/wav",
+                        headers={"Content-Disposition": f'attachment; filename="{project_id[:8]}-{name}.wav"'})
 
     @app.get("/v1/creators/projects/{project_id}/events")
     async def events(project_id: str, request: Request, limit: int = Query(default=100, ge=1, le=500)):
