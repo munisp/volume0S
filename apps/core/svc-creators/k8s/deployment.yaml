@@ -36,6 +36,7 @@ spec:
             - {name: SCRIPT_LLM_URL, value: "http://100.88.112.5:11434"}
             - {name: SCRIPT_MODEL, value: "gemma4-26b-64k:latest"}
             - {name: TTS_URL, value: "http://100.88.112.5:8880"}
+            - {name: IMAGE_URL, value: "http://100.88.112.5:8890"}
             - {name: S3_ENDPOINT_URL, value: "http://minio.minio.svc.cluster.local:9000"}
             - {name: ASSET_BUCKET, value: volumeos-assets}
           envFrom:
@@ -92,6 +93,7 @@ spec:
             - {name: SCRIPT_LLM_URL, value: "http://100.88.112.5:11434"}
             - {name: SCRIPT_MODEL, value: "gemma4-26b-64k:latest"}
             - {name: TTS_URL, value: "http://100.88.112.5:8880"}
+            - {name: IMAGE_URL, value: "http://100.88.112.5:8890"}
             - {name: S3_ENDPOINT_URL, value: "http://minio.minio.svc.cluster.local:9000"}
             - {name: ASSET_BUCKET, value: volumeos-assets}
           envFrom:

@@ -11,3 +11,15 @@ services:
       resources:
         reservations:
           devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+  creators-image:
+    build: ./creators-image   # on ghana: ~/creators-home/creators-image
+    image: creators-image:1
+    restart: unless-stopped
+    env_file: /home/newwave-dgx/creators-home/secrets.env
+    environment: [HF_HUB_OFFLINE=1]
+    ports: ["100.88.112.5:8890:8890"]
+    volumes: ["/home/newwave-dgx/creators-home/models:/models"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]

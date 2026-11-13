@@ -239,3 +239,21 @@ def test_creators_jobs_voices_and_audio_follow_roles():
         assert client.post("/v1/creators/voices/preview", headers=auth(), json={"voice": "af_heart"}).status_code == 200
     assert [c[1] for c in creators.calls] == [f"/projects/{PROJECT}/jobs", "/voices/preview"]
     assert all(c[3] == "delivery-sub" for c in creators.calls)
+
+
+def test_creators_scenes_images_and_thumbnail_routes():
+    reader = Claims("demo-tenant", "reader-sub", frozenset({"reader"}))
+    delivery = Claims("demo-tenant", "delivery-sub", frozenset({"delivery"}))
+    creators = FakeCreatorsAudio()
+    with TestClient(create_app(FakeWorkflows(), FakeAuthenticator(reader), FakeQAAssets(), people=FakePeople(), creators=creators)) as client:
+        assert client.get(f"/v1/creators/projects/{PROJECT}/images/scene-001", headers=auth()).status_code == 200
+        assert client.get(f"/v1/creators/projects/{PROJECT}/images/thumb-2", headers=auth()).status_code == 200
+        assert client.get(f"/v1/creators/projects/{PROJECT}/images/other", headers=auth()).status_code in (400, 404, 422)
+        assert client.get(f"/v1/creators/projects/{PROJECT}/scene-images.zip", headers=auth()).status_code == 200
+        assert client.put(f"/v1/creators/projects/{PROJECT}/scenes/2", headers=auth(), json={"prompt": "x y z", "version": 1}).status_code == 403
+        assert client.put(f"/v1/creators/projects/{PROJECT}/thumbnail", headers=auth(), json={"chosen": 1, "version": 1}).status_code == 403
+    creators = FakeCreatorsAudio()
+    with TestClient(create_app(FakeWorkflows(), FakeAuthenticator(delivery), FakeQAAssets(), people=FakePeople(), creators=creators)) as client:
+        assert client.put(f"/v1/creators/projects/{PROJECT}/scenes/2", headers=auth(), json={"prompt": "x y z", "version": 1}).status_code == 200
+        assert client.put(f"/v1/creators/projects/{PROJECT}/thumbnail", headers=auth(), json={"chosen": 1, "version": 1}).status_code == 200
+    assert [c[1] for c in creators.calls] == [f"/projects/{PROJECT}/scenes/2", f"/projects/{PROJECT}/thumbnail"]

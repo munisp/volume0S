@@ -208,3 +208,129 @@ class AudioStore:
                 raise ProviderError("stored audio is larger than expected")
             return obj["Body"].read()
         return await asyncio.to_thread(read)
+
+
+# Scenes, characters and thumbnails (prompts for the script model) ------------------------------------------------
+async def _json_chat(writer: "OllamaWriter", system: str, ask: str, max_tokens: int = 4096) -> dict[str, Any]:
+    raw = await writer._chat(system, ask, json_mode=True, max_tokens=max_tokens, temperature=0.5)
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        raise ProviderError("the script model returned something that couldn't be read; try again") from exc
+    if not isinstance(value, dict):
+        raise ProviderError("the script model returned something that couldn't be read; try again")
+    return value
+
+
+async def characters(writer: "OllamaWriter", system: str, script: str) -> list[dict[str, str]]:
+    """The people (or figures) who recur in the video, each with one fixed look so every scene shows the same person."""
+    ask = ("Here is a narration script:\n\"\"\"" + script[:24000] + "\"\"\"\n\nList the recurring characters a viewer would "
+           "see in the visuals (at most 4; none if the video is not about specific people). For each give a short name and "
+           "a fixed physical description for an image model: age, gender, skin tone, hair, build, typical clothing (one "
+           'line, no personality). Answer as JSON: {"characters": [{"name": "...", "look": "..."}]}')
+    value = await _json_chat(writer, system, ask, 1024)
+    out = []
+    for item in value.get("characters", [])[:4]:
+        if isinstance(item, dict) and str(item.get("name", "")).strip() and str(item.get("look", "")).strip():
+            out.append({"name": str(item["name"]).strip()[:40], "look": str(item["look"]).strip()[:300]})
+    return out
+
+
+async def scene_visuals(writer: "OllamaWriter", system: str, title: str, heading: str, segments: list[str],
+                        cast: list[dict[str, str]]) -> list[dict[str, str]]:
+    """For each narration segment of a chapter: what is seen, an image prompt, the camera and the lighting."""
+    numbered = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(segments))
+    people = "\n".join(f"- {c['name']}: {c['look']}" for c in cast) or "(no recurring characters)"
+    ask = (f"Video: {title}\nChapter: {heading}\nRecurring characters (refer to them by name):\n{people}\n\n"
+           f"The chapter's narration, cut into {len(segments)} scenes:\n{numbered}\n\n"
+           "For EACH scene, in order, describe one still image that shows exactly what that narration says (if it "
+           "mentions a person praying, show a person praying; separation shows separation). Vary the shots; never repeat "
+           "an image. Give: visual (one sentence), prompt (a concise image-generation prompt, subject and action first, "
+           "under 45 words, no text in the image, name characters exactly as listed), camera (shot and angle), lighting.\n"
+           'Answer as JSON: {"scenes": [{"visual": "...", "prompt": "...", "camera": "...", "lighting": "..."}]}')
+    value = await _json_chat(writer, system, ask, 600 * len(segments) + 500)
+    items = value.get("scenes", [])
+    if not isinstance(items, list) or len(items) != len(segments):
+        raise ProviderError(f"the script model described {len(items) if isinstance(items, list) else 0} scenes for "
+                            f"{len(segments)} in “{heading}”; try again")
+    return [{key: str((item or {}).get(key, "")).strip()[:600] for key in ("visual", "prompt", "camera", "lighting")} for item in items]
+
+
+async def thumbnail_concepts(writer: "OllamaWriter", system: str, title: str, script: str) -> list[dict[str, str]]:
+    ask = (f"Video title: {title}\nScript (start):\n\"\"\"{script[:6000]}\"\"\"\n\nPropose 3 different high-click-through YouTube "
+           "thumbnail concepts. For each: the strongest emotional angle (one phrase); a caption of 2 to 5 words that is NOT "
+           "the title and makes people curious; a concise image prompt with one clear focal subject, strong colour contrast, "
+           "no text in the image, and empty space on one side for the caption; and that side (left or right).\n"
+           'Answer as JSON: {"concepts": [{"angle": "...", "caption": "...", "prompt": "...", "text_side": "left"}]}')
+    value = await _json_chat(writer, system, ask, 1500)
+    out = []
+    for item in value.get("concepts", [])[:3]:
+        caption = re.sub(r"\s+", " ", str((item or {}).get("caption", ""))).strip().strip('"')
+        if caption and caption.lower() != title.lower() and str(item.get("prompt", "")).strip():
+            out.append({"angle": str(item.get("angle", "")).strip()[:120], "caption": caption[:40],
+                        "prompt": str(item["prompt"]).strip()[:600], "text_side": "right" if item.get("text_side") == "right" else "left"})
+    if not out:
+        raise ProviderError("the script model didn't propose usable thumbnails; try again")
+    return out
+
+
+def image_prompt(scene_prompt: str, cast: list[dict[str, str]], preset: str, aspect: str = "16:9") -> str:
+    """The prompt sent to the image model: the scene first (image models weigh the start most), each character who
+    appears replaced by their fixed look, then the channel's look."""
+    prompt = scene_prompt
+    for person in cast:
+        prompt = re.sub(rf"\b{re.escape(person['name'])}\b", f"{person['name']} ({person['look']})", prompt, count=1, flags=re.I)
+    style = preset.strip() or "cinematic still, realistic photography, natural light, high detail"
+    return f"{prompt}, {style}, {'vertical' if aspect == '9:16' else 'wide'} composition"
+
+
+class ImageService:
+    """creators-image on ghana: one PNG per prompt (SDXL or FLUX.1-schnell); the seed makes it repeatable."""
+
+    def __init__(self, base_url: str, token: str, timeout: float = 300.0):
+        if not base_url or len(token) < 32:
+            raise RuntimeError("IMAGE_URL and CREATORS_TTS_TOKEN are required")
+        self.base_url, self.token, self.timeout = base_url.rstrip("/"), token, timeout
+
+    @classmethod
+    def from_env(cls) -> "ImageService | None":
+        url, token = os.environ.get("IMAGE_URL", ""), os.environ.get("CREATORS_TTS_TOKEN", "")
+        return cls(url, token) if url and token else None
+
+    async def generate(self, prompt: str, width: int, height: int, seed: int) -> tuple[bytes, str]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(self.base_url + "/v1/image", headers={"Authorization": f"Bearer {self.token}"},
+                                             json={"prompt": prompt[:2000], "width": width, "height": height, "seed": seed})
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(f"the image service refused the prompt ({exc.response.status_code})") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError("the image service didn't answer") from exc
+        return response.content, response.headers.get("x-model", "")
+
+
+def caption_thumbnail(background: bytes, caption: str, side: str, size: tuple[int, int] = (1280, 720)) -> bytes:
+    """The 1280x720 thumbnail: the background cropped to 16:9, the caption large and bold on the free side, white with
+    a dark outline so it reads on a phone."""
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    image = ImageOps.fit(Image.open(io.BytesIO(background)).convert("RGB"), size)
+    draw = ImageDraw.Draw(image)
+    words = caption.upper().split()
+    lines = [" ".join(words[i:i + 2]) for i in range(0, len(words), 2)] or [caption.upper()]
+    font_path = next((p for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",) if os.path.exists(p)), None)
+    box_w = int(size[0] * 0.46)
+    font_size = 150
+    while font_size > 40:
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default(font_size)
+        widths = [draw.textbbox((0, 0), line, font=font, stroke_width=8)[2] for line in lines]
+        if max(widths) <= box_w and font_size * 1.1 * len(lines) <= size[1] * 0.8:
+            break
+        font_size -= 6
+    line_h = int(font_size * 1.1)
+    y = (size[1] - line_h * len(lines)) // 2
+    for line, width in zip(lines, widths):
+        x = int(size[0] * 0.05) if side == "left" else size[0] - width - int(size[0] * 0.05)
+        draw.text((x, y), line, font=font, fill=(255, 255, 255), stroke_width=max(4, font_size // 14), stroke_fill=(10, 10, 10))
+        y += line_h
+    out = io.BytesIO(); image.save(out, format="PNG"); return out.getvalue()

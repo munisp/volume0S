@@ -105,9 +105,21 @@ class ScriptInput(InputModel):
 
 
 class JobInput(InputModel):
-    kind: Literal["script", "voiceover"]
+    kind: Literal["script", "voiceover", "scenes", "images", "thumbnail"]
+    scenes: list[int] = Field(default_factory=list, max_length=500)  # images: only these scenes (empty: all)
     voice: str = Field(default="", max_length=40, pattern=r"^([a-z]{2}_[a-z]{2,20})?$")
     speed: float = Field(default=1.0, ge=0.6, le=1.6)
+    version: int = Field(ge=1)
+
+
+class SceneEdit(InputModel):
+    visual: str = Field(default="", max_length=600)
+    prompt: str = Field(min_length=3, max_length=600)
+    version: int = Field(ge=1)
+
+
+class ThumbnailChoice(InputModel):
+    chosen: int = Field(ge=1, le=10)
     version: int = Field(ge=1)
 
 
@@ -387,9 +399,16 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> Fast
             if body.voice not in {v["id"] for v in await app.state.voices.voices()}:
                 return error(400, "invalid_request", "unknown voice")
             params = {"voice": body.voice, "speed": body.speed}
+        partial = False
+        if body.kind == "images":
+            numbers = {s["number"] for s in project["record"].get("scenes") or []}
+            if body.scenes and not set(body.scenes) <= numbers:
+                return error(400, "invalid_request", "those scenes aren't in this video")
+            partial = bool(body.scenes) and project["stages"]["images"]["state"] in model.FINISHED
+            params = {"scenes": sorted(set(body.scenes))}
         if project["version"] != body.version:
             raise ProjectError("the project changed since you opened it; reload it first", "stale_version")
-        reset = model.start_job(project["stages"], body.kind)
+        reset = model.start_job(project["stages"], body.kind, partial)
         try:
             saved, job = await app.state.store.start_job(tenant, project, body.version, body.kind, params, actor, {
                 "kind": "job_started", "stage": model.JOB_STAGE[body.kind], "detail": {"job": body.kind, **params, "reset": reset}})
@@ -444,6 +463,77 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> Fast
             return error(404, "not_found", "no such audio for this project")
         return Response(await app.state.audio.get(key), media_type="audio/wav",
                         headers={"Content-Disposition": f'attachment; filename="{project_id[:8]}-{name}.wav"'})
+
+    # Scenes, images and thumbnails --------------------------------------------------------------------------------
+    @app.put("/v1/creators/projects/{project_id}/scenes/{number}")
+    async def edit_scene(project_id: str, number: int, body: SceneEdit, request: Request):
+        """A person's own description and image prompt for one scene; its image is then out of date until remade."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        tenant, actor = who
+        project = await load(tenant, project_id)
+        scene = next((s for s in project["record"].get("scenes") or [] if s["number"] == number), None)
+        if scene is None:
+            return error(404, "not_found", "no such scene in this video")
+        if project["stages"]["images"]["state"] == "running":
+            raise ProjectError("images are being made; wait for them to finish", "job_running")
+        scene.update(prompt=body.prompt.strip(), visual=body.visual.strip() or scene["visual"], edited_by=actor)
+        if scene.get("image"):
+            scene["image"]["stale"] = True
+        return await save(tenant, project, body.version, {"kind": "scene_edited", "stage": "scenes", "actor": actor,
+                                                          "detail": {"scene": number}})
+
+    @app.put("/v1/creators/projects/{project_id}/thumbnail")
+    async def choose_thumbnail(project_id: str, body: ThumbnailChoice, request: Request):
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        tenant, actor = who
+        project = await load(tenant, project_id)
+        thumb = project["record"].get("thumbnail") or {}
+        if not 1 <= body.chosen <= len(thumb.get("options", [])):
+            return error(404, "not_found", "no such thumbnail option")
+        thumb.update(chosen=body.chosen, chosen_by=actor, chosen_at=model.now())
+        return await save(tenant, project, body.version, {"kind": "thumbnail_chosen", "stage": "thumbnail", "actor": actor,
+                                                          "detail": {"chosen": body.chosen, "caption": thumb["options"][body.chosen - 1]["caption"]}})
+
+    @app.get("/v1/creators/projects/{project_id}/images/{name}")
+    async def picture(project_id: str, name: str, request: Request):
+        """A scene's image ('scene-NNN') or a thumbnail option ('thumb-N'), from this project only."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        project = await load(who[0], project_id)
+        key = None
+        if re.fullmatch(r"scene-\d{3}", name):
+            scene = next((s for s in project["record"].get("scenes") or [] if s["number"] == int(name[6:])), None)
+            key = ((scene or {}).get("image") or {}).get("key")
+        elif re.fullmatch(r"thumb-\d", name):
+            options = (project["record"].get("thumbnail") or {}).get("options", [])
+            key = options[int(name[6:]) - 1]["key"] if 1 <= int(name[6:]) <= len(options) else None
+        if not key or app.state.audio is None or not key.startswith(f"{who[0]}/creators/{project_id}/"):
+            return error(404, "not_found", "no such image for this project")
+        return Response(await app.state.audio.get(key), media_type="image/png")
+
+    @app.get("/v1/creators/projects/{project_id}/images.zip")
+    async def images_zip(project_id: str, request: Request):
+        """Every scene image of the video, numbered in order, in one ZIP."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        project = await load(who[0], project_id)
+        scenes = [s for s in project["record"].get("scenes") or [] if (s.get("image") or {}).get("key")]
+        if not scenes or app.state.audio is None:
+            return error(404, "not_found", "no images yet")
+        import io as _io, zipfile
+        out = _io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as archive:
+            for s in scenes:
+                if s["image"]["key"].startswith(f"{who[0]}/creators/{project_id}/"):
+                    archive.writestr(f"scene-{s['number']:03d}.png", await app.state.audio.get(s["image"]["key"]))
+        return Response(out.getvalue(), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{project_id[:8]}-scenes.zip"'})
 
     @app.get("/v1/creators/projects/{project_id}/events")
     async def events(project_id: str, request: Request, limit: int = Query(default=100, ge=1, le=500)):

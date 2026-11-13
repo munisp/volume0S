@@ -352,6 +352,9 @@ export type CreatorProject = {
     title?: { chosen?: string; options?: string[]; source?: string }
     script?: { text: string; sections: CreatorScriptSection[]; words: number; target_words: number; estimated_minutes: number; source: string; updated_at: string }
     approvals?: Record<string, { by: string; at: string; note: string }>
+    characters?: { name: string; look: string }[]
+    scenes?: CreatorScene[]
+    thumbnail?: { options: { angle: string; caption: string; prompt: string; text_side: string; key: string; seed: number }[]; chosen: number | null; made_at: string }
     voiceover?: { voice: string; speed: number; script_sha256: string; total_seconds: number; provider: string; updated_at: string;
       sections: { index: number; heading: string; key: string; seconds: number }[] }
     costs?: unknown[]
@@ -364,3 +367,6 @@ export type CreatorJob = { id: string; kind: 'script' | 'voiceover'; status: 'qu
   params: Record<string, unknown>; attempts: number; created_at: string; started_at: string | null; finished_at: string | null }
 
 export type CreatorVoice = { id: string; name: string; gender: 'male' | 'female'; accent: string }
+
+export type CreatorScene = { number: number; chapter: number; narration: string; visual: string; prompt: string; camera: string; lighting: string;
+  seconds: number; seed: number; image: { key: string; prompt: string; model: string; made_at: string; stale?: boolean } | null }

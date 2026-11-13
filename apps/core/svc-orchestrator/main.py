@@ -519,7 +519,7 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         return await creators_service().call("PATCH", f"/projects/{project_id}", claims.tenant_id, claims.actor, body)
 
     @app.put("/v1/creators/projects/{project_id}/{section}")
-    async def set_creator_section(project_id: CreatorId, section: Literal["title", "script"], body: CreatorBody,
+    async def set_creator_section(project_id: CreatorId, section: Literal["title", "script", "thumbnail"], body: CreatorBody,
                                   claims: Claims = Depends(need("delivery"))):
         return await creators_service().call("PUT", f"/projects/{project_id}/{section}", claims.tenant_id, claims.actor, body)
 
@@ -551,6 +551,22 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     async def creator_audio(project_id: CreatorId, name: Annotated[str, Path(pattern=r"^(narration|chapter-\d{2})$")],
                             claims: Claims = Depends(need("reader"))):
         data, media, disposition = await creators_service().raw("GET", f"/projects/{project_id}/audio/{name}", claims.tenant_id, claims.actor)
+        return Response(data, media_type=media, headers={"Content-Disposition": disposition} if disposition else None)
+
+    @app.put("/v1/creators/projects/{project_id}/scenes/{number}")
+    async def edit_creator_scene(project_id: CreatorId, number: Annotated[int, Path(ge=1, le=999)], body: CreatorBody,
+                                 claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("PUT", f"/projects/{project_id}/scenes/{number}", claims.tenant_id, claims.actor, body)
+
+    @app.get("/v1/creators/projects/{project_id}/images/{name}")
+    async def creator_image(project_id: CreatorId, name: Annotated[str, Path(pattern=r"^(scene-\d{3}|thumb-\d)$")],
+                            claims: Claims = Depends(need("reader"))):
+        data, media, _ = await creators_service().raw("GET", f"/projects/{project_id}/images/{name}", claims.tenant_id, claims.actor)
+        return Response(data, media_type=media)
+
+    @app.get("/v1/creators/projects/{project_id}/scene-images.zip")
+    async def creator_images_zip(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
+        data, media, disposition = await creators_service().raw("GET", f"/projects/{project_id}/images.zip", claims.tenant_id, claims.actor)
         return Response(data, media_type=media, headers={"Content-Disposition": disposition} if disposition else None)
 
     @app.get("/v1/creators/projects/{project_id}/events")

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { Check, Circle, CircleDot, Clapperboard, Download, Mic, Play, Plus, RefreshCw, RotateCcw, Sparkles, X } from 'lucide-react'
 import { useSession, errorText } from '../state/session-context'
 import { allowed } from '../lib/access'
-import type { CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorStage, CreatorVoice } from '../lib/types'
+import type { CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorScene, CreatorStage, CreatorVoice } from '../lib/types'
 import { Confirm, Empty, Field, Modal, Note, PageHead, RoleNote, Submit, When } from '../components/ui'
 
 const DURATIONS = [5, 10, 15, 20, 30, 45]
@@ -13,7 +13,7 @@ const STATE_LABEL: Record<CreatorStage['state'], string> = {
 }
 const EVENT_LABEL: Record<string, string> = {
   created: 'Project created', title_set: 'Title chosen', script_saved: 'Script saved', approved: 'Approved',
-  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made',
+  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made', scenes_saved: 'Scenes planned', images_saved: 'Images made', thumbnails_saved: 'Thumbnails made', thumbnail_chosen: 'Thumbnail chosen', scene_edited: 'Scene edited',
 }
 
 /** Offer 35 Creators Home: YouTube channels and their video projects, each moving through 12 production stages. */
@@ -166,7 +166,7 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
   const [reason, setReason] = useState('')
   const [events, setEvents] = useState<CreatorEvent[]>([])
   const [jobs, setJobs] = useState<CreatorJob[]>([])
-  const [confirm, setConfirm] = useState<'script' | 'voiceover' | null>(null)
+  const [confirm, setConfirm] = useState<'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | null>(null)
   const [voice, setVoice] = useState(project.record.voiceover?.voice ?? '')
   const [speed, setSpeed] = useState(1)
   const stage = (key: string) => project.stages.find(item => item.key === key)!
@@ -201,10 +201,13 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
   const approve = (key: string, message: string) => act(() => api.creatorStage(project.id, key, 'approve', '', project.version), message)
   const reopen = (key: string) => act(async () => { const r = await api.creatorStage(project.id, key, 'reopen', reason.trim(), project.version); setReason(''); return r },
     'Reopened. Everything built on it goes back to not started.')
-  const startJob = (kind: 'script' | 'voiceover') => act(async () => {
-    const r = await api.startCreatorJob(project.id, kind === 'script' ? { kind, version: project.version } : { kind, voice, speed, version: project.version })
+  const JOB_MESSAGE = { script: 'Writing the script. It appears here when it is ready.', voiceover: 'Making the voiceover, chapter by chapter.',
+    scenes: 'Planning the scenes from the narration.', images: 'Making the images, scene by scene.', thumbnail: 'Making three thumbnail options.' }
+  const startJob = (kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail', scenes: number[] = []) => act(async () => {
+    const input = kind === 'voiceover' ? { kind, voice, speed, version: project.version } : kind === 'images' ? { kind, scenes, version: project.version } : { kind, version: project.version }
+    const r = await api.startCreatorJob(project.id, input)
     setConfirm(null); setJobs(current => [r.job, ...current]); return r.project
-  }, kind === 'script' ? 'Writing the script. It appears here when it is ready.' : 'Making the voiceover, chapter by chapter.')
+  }, JOB_MESSAGE[kind])
 
   const titleStage = stage('title'), scriptStage = stage('script'), scriptApproval = stage('script_approval'), voiceStage = stage('voiceover')
   const titleApproved = titleStage.state === 'approved'
@@ -276,7 +279,14 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
       </div>
     </div>}
 
-    {voiceStage.state === 'done' && <Note>Next: scenes, images, thumbnail, SEO and the assembled video. These arrive in the following releases of Creators Home.</Note>}
+    {voiceStage.state === 'done' && <ScenesSection project={project} canEdit={canEdit} busy={busy} running={latest('scenes')?.progress || latest('images')?.progress || ''}
+      onPlan={() => setConfirm('scenes')} onImages={() => setConfirm('images')} onRemake={n => void startJob('images', [n])}
+      onEdit={(n, prompt, visual) => act(() => api.editCreatorScene(project.id, n, prompt, visual, project.version), 'Scene saved. Remake its image to see the change.')} />}
+
+    {scriptApproved && <ThumbnailSection project={project} canEdit={canEdit} busy={busy} progress={latest('thumbnail')?.progress || ''} onMake={() => setConfirm('thumbnail')}
+      onChoose={n => void act(() => api.chooseCreatorThumbnail(project.id, n, project.version), 'Thumbnail chosen.')} />}
+
+    {stage('images').state === 'done' && <Note>Next: the SEO package and the assembled video. These arrive in the next release of Creators Home.</Note>}
 
     <div className="stack" aria-label="History">
       <strong>History</strong>
@@ -292,6 +302,117 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
     {confirm === 'voiceover' && <Confirm title="Make the voiceover?" confirmLabel="Make the voiceover" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('voiceover')}>
       <p>Voice {voice || channel?.default_voice} at {speed.toFixed(2)}× reads the approved script, chapter by chapter (about {project.record.script?.estimated_minutes ?? project.duration_minutes} minutes of audio, a few minutes to make).</p>
     </Confirm>}
+    {confirm === 'scenes' && <Confirm title="Plan the scenes?" confirmLabel="Plan the scenes" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('scenes')}>
+      <p>The approved narration is cut into scenes of about 10 seconds (every word, in order), each with what is seen and an image prompt. Recurring characters get one fixed look. About a minute per chapter.</p>
+    </Confirm>}
+    {confirm === 'images' && <Confirm title={`Make ${project.record.scenes?.length ?? 0} images?`} confirmLabel="Make the images" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('images')}>
+      <p>One 16:9 image per scene, in {channel?.name ?? 'the channel'}'s look: about {Math.max(1, Math.round((project.record.scenes?.length ?? 0) * 7 / 60))} minutes on ghana's GPU. Images already made are replaced.</p>
+    </Confirm>}
+    {confirm === 'thumbnail' && <Confirm title="Make thumbnail options?" confirmLabel="Make thumbnails" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('thumbnail')}>
+      <p>Three concepts from the title and script: each with a short caption that isn't the title, drawn large on a 1280×720 image. You choose one.</p>
+    </Confirm>}
+  </div>
+}
+
+function useVisible<T extends Element>(): [React.RefObject<T | null>, boolean] {
+  const ref = useRef<T | null>(null)
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    const element = ref.current
+    if (!element || visible) return
+    const observer = new IntersectionObserver(entries => { if (entries.some(e => e.isIntersecting)) setVisible(true) }, { rootMargin: '300px' })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [visible])
+  return [ref, visible]
+}
+
+/** An image of this project, fetched with the user's token once it scrolls into view. */
+function ProjectImage({ projectId, name, alt, stamp }: { projectId: string; name: string; alt: string; stamp: string }) {
+  const { api } = useSession()
+  const [ref, visible] = useVisible<HTMLDivElement>()
+  const [url, setUrl] = useState('')
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    if (!visible) return
+    let active = true; let made = ''
+    api.creatorImage(projectId, name).then(u => { made = u; if (active) setUrl(u); else URL.revokeObjectURL(u) }, () => active && setFailed(true))
+    return () => { active = false; if (made) URL.revokeObjectURL(made) }
+  }, [api, projectId, name, visible, stamp])
+  return <div ref={ref} style={{ aspectRatio: '16 / 9', background: 'var(--surface-2, #f1f1ee)', borderRadius: 6, overflow: 'hidden', display: 'grid', placeItems: 'center' }}>
+    {url ? <img src={url} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span className="small muted">{failed ? 'Not loaded' : 'Loading…'}</span>}
+  </div>
+}
+
+function ScenesSection({ project, canEdit, busy, running, onPlan, onImages, onRemake, onEdit }: {
+  project: CreatorProject; canEdit: boolean; busy: boolean; running: string; onPlan: () => void; onImages: () => void
+  onRemake: (n: number) => void; onEdit: (n: number, prompt: string, visual: string) => void
+}) {
+  const { api, notify } = useSession()
+  const scenesStage = project.stages.find(s => s.key === 'scenes')!, imagesStage = project.stages.find(s => s.key === 'images')!
+  const scenes = project.record.scenes ?? []
+  const [editing, setEditing] = useState<{ n: number; prompt: string; visual: string } | null>(null)
+  const working = scenesStage.state === 'running' || imagesStage.state === 'running'
+  const total = scenes.reduce((sum, s) => sum + s.seconds, 0)
+  async function zip() {
+    try { const url = await api.creatorScenesZip(project.id); const a = document.createElement('a'); a.href = url; a.download = `${project.title || 'scenes'}-images.zip`; a.click(); window.setTimeout(() => URL.revokeObjectURL(url), 15000) }
+    catch (error) { notify('error', errorText(error)) }
+  }
+  return <div className="stack" aria-label="Scenes and images">
+    <strong>6–7 · Scenes and images</strong>
+    {scenesStage.state === 'failed' && <Note tone="failed">The scenes couldn't be planned: {scenesStage.note}</Note>}
+    {imagesStage.state === 'failed' && <Note tone="failed">The images couldn't be made: {imagesStage.note}</Note>}
+    {working && <Note>{scenesStage.state === 'running' ? 'Planning the scenes' : 'Making the images'}… {running || 'queued'}. This page updates by itself.</Note>}
+    {canEdit && !working && <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+      <button className="button button-primary" disabled={busy} onClick={onPlan}><Sparkles size={14} /> {scenes.length ? 'Plan the scenes again' : 'Plan the scenes'}</button>
+      {scenes.length > 0 && <button className="button button-primary" disabled={busy} onClick={onImages}><Sparkles size={14} /> {scenes.some(s => s.image) ? 'Make all images again' : `Make ${scenes.length} images`}</button>}
+      {scenes.some(s => s.image) && <button className="button button-secondary" onClick={() => void zip()}><Download size={14} /> All images (ZIP)</button>}
+    </div>}
+    {(project.record.characters?.length ?? 0) > 0 && <p className="small"><strong>Characters:</strong> {project.record.characters!.map(c => `${c.name} (${c.look})`).join(' · ')}</p>}
+    {scenes.length > 0 && <p className="small muted">{scenes.length} scenes · {Math.floor(total / 60)}:{String(Math.round(total % 60)).padStart(2, '0')} · {imagesStage.note}</p>}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+      {scenes.map((scene: CreatorScene) => <div key={scene.number} className="stack" style={{ border: '1px solid var(--border, #e5e5e0)', borderRadius: 8, padding: 10, gap: 6 }}>
+        {scene.image ? <ProjectImage projectId={project.id} name={`scene-${String(scene.number).padStart(3, '0')}`} alt={scene.visual} stamp={scene.image.made_at} />
+          : <div style={{ aspectRatio: '16 / 9', background: 'var(--surface-2, #f1f1ee)', borderRadius: 6, display: 'grid', placeItems: 'center' }}><span className="small muted">No image yet</span></div>}
+        <span className="small"><strong>Scene {scene.number}</strong> · chapter {scene.chapter} · {scene.seconds.toFixed(1)} s{scene.image?.stale ? ' · prompt changed, remake the image' : ''}</span>
+        <span className="small muted">“{scene.narration}”</span>
+        {editing?.n === scene.number ? <>
+          <textarea rows={2} value={editing.visual} maxLength={600} onChange={e => setEditing({ ...editing, visual: e.target.value })} aria-label="What is seen" />
+          <textarea rows={3} value={editing.prompt} maxLength={600} onChange={e => setEditing({ ...editing, prompt: e.target.value })} aria-label="Image prompt" />
+          <div className="row" style={{ gap: 6 }}>
+            <button className="button button-primary small" disabled={busy || editing.prompt.trim().length < 3} onClick={() => { onEdit(scene.number, editing.prompt.trim(), editing.visual.trim()); setEditing(null) }}>Save</button>
+            <button className="button button-secondary small" onClick={() => setEditing(null)}>Cancel</button>
+          </div>
+        </> : <>
+          <span className="small">{scene.visual} <span className="muted">({scene.camera}; {scene.lighting})</span></span>
+          {canEdit && !working && <div className="row" style={{ gap: 6 }}>
+            <button className="button button-secondary small" onClick={() => setEditing({ n: scene.number, prompt: scene.prompt, visual: scene.visual })}>Edit prompt</button>
+            {scene.image && <button className="button button-secondary small" disabled={busy} onClick={() => onRemake(scene.number)}><RotateCcw size={12} /> Remake image</button>}
+          </div>}
+        </>}
+      </div>)}
+    </div>
+  </div>
+}
+
+function ThumbnailSection({ project, canEdit, busy, progress, onMake, onChoose }: {
+  project: CreatorProject; canEdit: boolean; busy: boolean; progress: string; onMake: () => void; onChoose: (n: number) => void
+}) {
+  const stage = project.stages.find(s => s.key === 'thumbnail')!
+  const thumb = project.record.thumbnail
+  return <div className="stack" aria-label="Thumbnail">
+    <strong>8 · Thumbnail</strong>
+    {stage.state === 'failed' && <Note tone="failed">The thumbnails couldn't be made: {stage.note}</Note>}
+    {stage.state === 'running' && <Note>Making thumbnails… {progress || 'queued'}.</Note>}
+    {canEdit && stage.state !== 'running' && <div><button className="button button-primary" disabled={busy} onClick={onMake}><Sparkles size={14} /> {thumb ? 'Make new options' : 'Make thumbnail options'}</button></div>}
+    {thumb && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+      {thumb.options.map((option, index) => <div key={option.key} className="stack" style={{ border: `2px solid ${thumb.chosen === index + 1 ? 'var(--done, #15803d)' : 'var(--border, #e5e5e0)'}`, borderRadius: 8, padding: 8, gap: 6 }}>
+        <ProjectImage projectId={project.id} name={`thumb-${index + 1}`} alt={option.caption} stamp={thumb.made_at} />
+        <span className="small"><strong>“{option.caption}”</strong> · {option.angle}</span>
+        {thumb.chosen === index + 1 ? <span className="small" style={{ color: 'var(--done, #15803d)' }}><Check size={12} /> Chosen</span>
+          : canEdit && <button className="button button-secondary small" disabled={busy} onClick={() => onChoose(index + 1)}>Choose this one</button>}
+      </div>)}
+    </div>}
   </div>
 }
 

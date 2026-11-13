@@ -76,10 +76,17 @@ def set_state(stages: dict[str, dict[str, Any]], stage: str, state: str, note: s
     stages[stage] = {"state": state, "updated_at": now(), "note": note[:1000]}
 
 
+# Stages that don't build on every stage before them: the thumbnail comes from the title and the approved script, so
+# remaking the voice, scenes or images leaves it alone.
+BUILT_ON = {"thumbnail": "script_approval"}
+
+
 def reset_after(stages: dict[str, dict[str, Any]], stage: str) -> list[str]:
-    """Everything after `stage` goes back to pending: it was built on what is being changed."""
+    """Everything after `stage` that was built on it goes back to pending."""
     reset = []
     for key in STAGE_KEYS[stage_index(stage) + 1:]:
+        if key in BUILT_ON and stage_index(stage) > stage_index(BUILT_ON[key]):
+            continue
         if stages[key]["state"] != "pending":
             reset.append(key)
         stages[key] = {"state": "pending", "updated_at": now(), "note": ""}
@@ -149,22 +156,28 @@ def script_record(text: str, duration_minutes: int, source: str) -> dict[str, An
 # Jobs: work the creators worker does for a stage. A job can only start when the stages before its stage are finished
 # (an approved title before the script; an approved script before the voice), and starting one sends everything
 # built on its stage back to not started.
-JOB_STAGE = {"script": "script", "voiceover": "voiceover"}
-JOB_NEEDS = {"script": "title", "voiceover": "script_approval"}
+JOB_STAGE = {"script": "script", "voiceover": "voiceover", "scenes": "scenes", "images": "images", "thumbnail": "thumbnail"}
+# What has to be finished first: an approved title before the script, the approved script before the voice and the
+# thumbnail, the voiceover (its timings) before the scenes, the scenes before their images.
+JOB_NEEDS = {"script": "title", "voiceover": "script_approval", "scenes": "voiceover", "images": "scenes",
+             "thumbnail": "script_approval"}
+SCENE_WORDS = 25  # about 10 seconds of narration per scene
 VOICE_SPEEDS = (0.6, 1.6)
 
 
-def start_job(stages: dict[str, dict[str, Any]], kind: str) -> list[str]:
+def start_job(stages: dict[str, dict[str, Any]], kind: str, partial: bool = False) -> list[str]:
     if kind not in JOB_STAGE:
         raise ProjectError(f"unknown job {kind!r}", status=400)
     stage, needs = JOB_STAGE[kind], JOB_NEEDS[kind]
-    if stages[needs]["state"] != "approved":
-        raise ProjectError(f"approve the {needs.replace('_approval', '').replace('_', ' ')} first", "earlier_stage_open")
+    if stages[needs]["state"] not in FINISHED:
+        what = needs.replace("_approval", "").replace("_", " ")
+        raise ProjectError(f"{'approve' if needs in APPROVAL_STAGES else 'finish'} the {what} first", "earlier_stage_open")
     if stages[stage]["state"] == "running":
         raise ProjectError(f"the {kind} is already being made", "job_running")
     if kind == "script" and stages["script_approval"]["state"] == "approved":
         raise ProjectError("the script is approved; reopen it to write a new one", "invalid_state")
-    reset = reset_after(stages, stage)
+    # The thumbnail doesn't depend on the scenes or images, and remaking some images keeps the rest: nothing else changes.
+    reset = [] if kind == "thumbnail" or partial else reset_after(stages, stage)
     set_state(stages, stage, "running", "queued")
     return reset
 
@@ -182,3 +195,21 @@ def finish_job(stages: dict[str, dict[str, Any]], kind: str, ok: bool, note: str
 def script_outline_size(duration_minutes: int) -> int:
     """How many chapters a script of this length gets: one roughly every 2.5 minutes, at least 3."""
     return max(3, min(18, round(duration_minutes / 2.5)))
+
+
+def split_scenes(text: str, words: int = SCENE_WORDS) -> list[str]:
+    """A chapter's narration as consecutive scenes of whole sentences, about `words` words each. Every word lands in
+    exactly one scene, in order: the scenes are the narration, cut, never rewritten."""
+    import re as _re
+    sentences = [s.strip() for s in _re.split(r"(?<=[.!?])\s+|\n\s*\n", text) if s.strip()]
+    scenes, current = [], []
+    for sentence in sentences:
+        current.append(sentence)
+        if sum(len(s.split()) for s in current) >= words:
+            scenes.append(" ".join(current)); current = []
+    if current:
+        if scenes and sum(len(s.split()) for s in current) < words // 3:
+            scenes[-1] += " " + " ".join(current)
+        else:
+            scenes.append(" ".join(current))
+    return scenes

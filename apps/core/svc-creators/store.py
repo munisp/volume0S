@@ -104,6 +104,9 @@ DROP POLICY IF EXISTS tenant_isolation ON creator_jobs;
 CREATE POLICY tenant_isolation ON creator_jobs
     USING (tenant_id = current_setting('volumeos.tenant_id', true) OR current_setting('volumeos.worker', true) = 'on')
     WITH CHECK (tenant_id = current_setting('volumeos.tenant_id', true) OR current_setting('volumeos.worker', true) = 'on');
+"""), ("003_visual_jobs", """
+ALTER TABLE creator_jobs DROP CONSTRAINT IF EXISTS creator_jobs_kind_check;
+ALTER TABLE creator_jobs ADD CONSTRAINT creator_jobs_kind_check CHECK (kind IN ('script','voiceover','scenes','images','thumbnail'));
 """)]
 
 CHANNEL_FIELDS = ("name", "youtube_handle", "niche", "audience", "language", "writing_instructions", "visual_preset",

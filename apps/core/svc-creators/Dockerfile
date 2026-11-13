@@ -1,4 +1,5 @@
 FROM python:3.12-slim AS test
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml ./
@@ -7,6 +8,8 @@ COPY tests ./tests
 RUN pip install --no-cache-dir '.[test]' && python -m pytest && touch /tests-passed
 
 FROM python:3.12-slim
+# Bold font for thumbnail captions.
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml ./

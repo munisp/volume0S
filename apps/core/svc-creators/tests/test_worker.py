@@ -165,3 +165,102 @@ def test_narration_cleanup_chunking_and_joining():
     assert all(len(c) <= 500 for c in parts) and parts[-1] == "Short one."
     audio, seconds = join_wavs([wav(1.0), wav(0.5)], pause_seconds=0.5)
     assert abs(seconds - 2.0) < 0.01 and audio[:4] == b"RIFF"
+
+
+import json  # noqa: E402
+import re  # noqa: E402
+import zipfile  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+import model  # noqa: E402
+
+
+def png(size=(1344, 768)):
+    out = io.BytesIO(); Image.new("RGB", size, (30, 60, 90)).save(out, format="PNG"); return out.getvalue()
+
+
+class VisualWriter(FakeWriter):
+    """Answers the scene, character and thumbnail prompts like the model would."""
+
+    async def _chat(self, system, ask, json_mode=False, max_tokens=0, temperature=0):
+        if "recurring characters a viewer would see" in ask:
+            return json.dumps({"characters": [{"name": "Tunde", "look": "30-year-old Nigerian man, short hair, blue shirt"}]})
+        if "cut into" in ask:
+            n = int(re.search(r"cut into (\d+) scenes", ask).group(1))
+            return json.dumps({"scenes": [{"visual": f"shot {i}", "prompt": f"Tunde checks his phone, scene {i}", "camera": "close-up",
+                                           "lighting": "warm"} for i in range(n)]})
+        return json.dumps({"concepts": [{"angle": "shock", "caption": "Gone By The 15th", "prompt": "empty wallet on a desk", "text_side": "left"},
+                                        {"angle": "hope", "caption": "Where Your Salary Goes", "prompt": "x", "text_side": "right"},
+                                        {"angle": "fear", "caption": "The Silent Leak", "prompt": "a leaking tap of naira notes", "text_side": "right"}]})
+
+
+class FakeImages:
+    def __init__(self):
+        self.prompts = []
+
+    async def generate(self, prompt, width, height, seed):
+        self.prompts.append((prompt, seed)); return png((width, height)), "fake-sdxl"
+
+
+async def voiced_project(client, store, voices, audio):
+    p = approved_title_project(client)
+    p = client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "script", "version": p["version"]}).json()["project"]
+    await Worker(store, FakeWriter(), voices, audio).once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    p = client.post(f"/v1/creators/projects/{p['id']}/stages/script_approval/approve", headers=headers(), json={"version": p["version"]}).json()
+    p = client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "voiceover", "voice": "af_heart", "version": p["version"]}).json()["project"]
+    await Worker(store, FakeWriter(), voices, audio).once()
+    return client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+
+
+async def test_scenes_cover_the_narration_images_follow_and_one_can_be_remade(setup):
+    client, store, voices, audio = setup
+    images = FakeImages()
+    worker = Worker(store, VisualWriter(), voices, audio, images)
+    p = await voiced_project(client, store, voices, audio)
+    assert client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "images", "version": p["version"]}).status_code == 409
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "scenes", "version": p["version"]})
+    await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    scenes = p["record"]["scenes"]
+    assert state(p, "scenes") == "done" and p["record"]["characters"][0]["name"] == "Tunde"
+    # Every word of the approved narration is in exactly one scene, in order.
+    narration = " ".join(s["text"] for s in p["record"]["script"]["sections"]).split()
+    assert " ".join(s["narration"] for s in scenes).split() == narration
+    assert [s["number"] for s in scenes] == list(range(1, len(scenes) + 1)) and all(s["seconds"] > 0 for s in scenes)
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "thumbnail", "version": p["version"]})
+    await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    options = p["record"]["thumbnail"]["options"]
+    assert state(p, "thumbnail") == "done" and len(options) == 2  # the one repeating the title was dropped
+    with Image.open(io.BytesIO(client.get(f"/v1/creators/projects/{p['id']}/images/thumb-1", headers=headers()).content)) as t:
+        assert t.size == (1280, 720)
+    p = client.put(f"/v1/creators/projects/{p['id']}/thumbnail", headers=headers(), json={"chosen": 2, "version": p["version"]}).json()
+    assert p["record"]["thumbnail"]["chosen"] == 2
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "images", "version": p["version"]})
+    await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    assert state(p, "images") == "done" and all(s["image"] for s in p["record"]["scenes"])
+    assert "30-year-old Nigerian man" in next(p for p, _ in images.prompts if "scene 0" in p)  # the character's fixed look is in every prompt naming him
+    # Edit one scene's prompt, remake only that image: nothing else is reset.
+    p = client.put(f"/v1/creators/projects/{p['id']}/scenes/2", headers=headers(), json={"prompt": "Tunde smiling at a market stall", "version": p["version"]}).json()
+    assert p["record"]["scenes"][1]["image"]["stale"] is True
+    before = len(images.prompts)
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "images", "scenes": [2], "version": p["version"]})
+    await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    assert len(images.prompts) == before + 1 and "market stall" in images.prompts[-1][0]
+    assert state(p, "thumbnail") == "done" and p["record"]["thumbnail"]["chosen"] == 2
+    assert "stale" not in p["record"]["scenes"][1]["image"]
+    z = client.get(f"/v1/creators/projects/{p['id']}/images.zip", headers=headers())
+    with zipfile.ZipFile(io.BytesIO(z.content)) as archive:
+        assert archive.namelist()[0] == "scene-001.png" and len(archive.namelist()) == len(p["record"]["scenes"])
+    assert client.get(f"/v1/creators/projects/{p['id']}/images/scene-001", headers=headers("other")).status_code == 404
+    assert client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "images", "scenes": [999], "version": p["version"]}).status_code == 400
+
+
+def test_scene_split_keeps_every_word_in_order():
+    text = "First sentence here. " * 30 + "\n\nA final short line."
+    scenes = model.split_scenes(text)
+    assert " ".join(scenes).split() == text.split() and all(len(s.split()) >= 8 for s in scenes)

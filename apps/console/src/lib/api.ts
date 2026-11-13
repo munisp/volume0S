@@ -188,7 +188,7 @@ export class VolumeOSApi {
     return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/stages/${encodeURIComponent(stage)}/${action}`, { method: 'POST', body: { note, version } })
   }
 
-  startCreatorJob(id: string, input: { kind: 'script' | 'voiceover'; voice?: string; speed?: number; version: number }) {
+  startCreatorJob(id: string, input: { kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail'; voice?: string; speed?: number; scenes?: number[]; version: number }) {
     return this.request<{ project: CreatorProject; job: CreatorJob }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/jobs`, { method: 'POST', body: input })
   }
 
@@ -199,6 +199,18 @@ export class VolumeOSApi {
   previewCreatorVoice(voice: string, speed: number, text = '') { return this.audioUrl('/v1/creators/voices/preview', { voice, speed, text }) }
 
   creatorAudio(id: string, name: string) { return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/audio/${name}`) }
+
+  editCreatorScene(id: string, scene: number, prompt: string, visual: string, version: number) {
+    return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/scenes/${scene}`, { method: 'PUT', body: { prompt, visual, version } })
+  }
+
+  chooseCreatorThumbnail(id: string, chosen: number, version: number) {
+    return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/thumbnail`, { method: 'PUT', body: { chosen, version } })
+  }
+
+  creatorImage(id: string, name: string) { return this.blobUrl(`/v1/creators/projects/${encodeURIComponent(id)}/images/${name}`) }
+
+  creatorScenesZip(id: string) { return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/scene-images.zip`) }
 
   creatorEvents(id: string) { return this.request<{ events: CreatorEvent[] }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/events`) }
 
