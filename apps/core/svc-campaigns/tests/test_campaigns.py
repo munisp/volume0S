@@ -3,6 +3,8 @@ import json
 import os
 import uuid
 
+import pytest
+
 os.environ["VOLUMEOS_SERVICE_TOKEN"] = "t" * 40
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -285,9 +287,20 @@ def test_unsubscribe_links_are_signed_and_suppress_the_address():
     assert read_unsubscribe_token(token) == ("acme", "ada@acme.ng")
     assert read_unsubscribe_token(token[:-2] + "AA") is None
     with client:
-        assert client.get("/v1/unsubscribe", params={"t": token}).status_code == 200
+        page = client.get("/v1/unsubscribe", params={"t": token})  # a mail scanner opening the link changes nothing
+        assert page.status_code == 200 and 'method="post"' in page.text and services.suppress_calls == []
+        assert client.post("/v1/unsubscribe", params={"t": token}).status_code == 200
         assert client.get("/v1/unsubscribe", params={"t": "forged"}).status_code == 400
+        assert client.post("/v1/unsubscribe", params={"t": "forged"}).status_code == 400
     assert services.suppress_calls == [("acme", "email", "ada@acme.ng")]
+
+
+def test_unsubscribe_links_refuse_without_a_signing_secret(monkeypatch):
+    token = unsubscribe_token("acme", "ada@acme.ng")
+    monkeypatch.setenv("VOLUMEOS_SERVICE_TOKEN", "")
+    assert read_unsubscribe_token(token) is None  # nothing verifies, so nothing can be forged with an empty key
+    with pytest.raises(ChannelError):
+        unsubscribe_token("acme", "ada@acme.ng")
 
 
 def test_payment_reminders_go_to_the_owners_once():

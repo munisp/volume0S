@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import os
 import re
 from contextlib import asynccontextmanager
@@ -385,12 +386,19 @@ def create_app(store: Any = None, drafter: Any = None, email: Any = None, whatsa
         return {"status": "sent", "recipients": sent}
 
     # Public unsubscribe -------------------------------------------------------------------------------------------
-    async def unsubscribe(t: str):
+    # GET only asks: mail scanners (Safe Links and the like) open every link in an email, and must not unsubscribe
+    # anyone. The button, and mail apps' one-click unsubscribe (RFC 8058, List-Unsubscribe-Post), POST it.
+    async def unsubscribe(request: Request, t: str):
         found = read_unsubscribe_token(t)
         page = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Unsubscribe</title>' \
                '<body style="font-family:system-ui,sans-serif;max-width:460px;margin:12vh auto;padding:0 16px;color:#1a1a1a">'
         if not found:
             return HTMLResponse(page + "<h1>Link not recognised</h1><p>This unsubscribe link isn't valid.</p>", status_code=400)
+        if request.method == "GET":
+            return HTMLResponse(page + "<h1>Unsubscribe?</h1><p>Stop getting these emails from this business.</p>"
+                                f'<form method="post" action="?t={html.escape(t)}"><button type="submit" '
+                                'style="font:inherit;padding:10px 18px;border-radius:8px;border:1px solid #1a1a1a;'
+                                'background:#1a1a1a;color:#fff;cursor:pointer">Unsubscribe</button></form>')
         tenant, address = found
         try:
             await app.state.services.suppress(tenant, "email", address, "unsubscribe link")

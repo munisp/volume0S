@@ -218,3 +218,25 @@ def test_studio_query_and_review_are_bound_to_current_qa_manifest(monkeypatch):
     assert snapshot.status == "approved"
     assert snapshot.assets == 7
     assert snapshot.manifest_sha256 == "a" * 64
+
+
+def _png(width, height):
+    out = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(out, format="PNG")
+    return out.getvalue()
+
+
+def test_a_giant_canvas_never_reaches_comfyui(monkeypatch):
+    # A compressed PNG declaring a huge canvas is tiny on disk; it is refused from its header, before decoding.
+    monkeypatch.setattr(studio, "MAX_SOURCE_PIXELS", 10_000)
+    with pytest.raises(ApplicationError) as refused:
+        studio.fit_source_photo(_png(200, 200))
+    assert refused.value.non_retryable and "too large" in str(refused.value)
+
+
+def test_a_big_photo_is_shrunk_and_a_normal_one_is_untouched(monkeypatch):
+    monkeypatch.setattr(studio, "SOURCE_MAX_SIDE", 100)
+    small = _png(80, 60)
+    assert studio.fit_source_photo(small) == small
+    with Image.open(io.BytesIO(studio.fit_source_photo(_png(400, 200)))) as shrunk:
+        assert shrunk.size == (100, 50)

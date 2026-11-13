@@ -39,6 +39,8 @@ def is_test_phone(phone: str) -> bool:
 # Unsubscribe links ----------------------------------------------------------------------------------------------
 def _key() -> bytes:
     secret = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
+    if len(secret) < 32:  # an empty secret would make every link forgeable: no key, no links
+        raise ChannelError("unsubscribe links need VOLUMEOS_SERVICE_TOKEN")
     return hmac.new(secret.encode(), b"volumeos.campaigns.unsubscribe", hashlib.sha256).digest()
 
 
@@ -55,8 +57,12 @@ def read_unsubscribe_token(token: str) -> tuple[str, str] | None:
         return None
     if len(raw) < 18:
         return None
+    try:
+        key = _key()
+    except ChannelError:
+        return None
     body, mac = raw[:-16], raw[-16:]
-    if not hmac.compare_digest(mac, hmac.new(_key(), body, hashlib.sha256).digest()[:16]):
+    if not hmac.compare_digest(mac, hmac.new(key, body, hashlib.sha256).digest()[:16]):
         return None
     try:
         tenant_id, email = body.decode().split("\x1f", 1)

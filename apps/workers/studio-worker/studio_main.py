@@ -189,11 +189,35 @@ async def comfy_request(method: str, path: str, **kwargs: Any) -> httpx.Response
         return response
 
 
+MAX_SOURCE_PIXELS = 60_000_000  # a 48 MP phone photo fits; a "small" PNG declaring a giant canvas does not
+SOURCE_MAX_SIDE = 2048            # the workflow scales to well under 1 MP anyway (ImageScaleToTotalPixels)
+
+
+def fit_source_photo(data: bytes) -> bytes:
+    """ComfyUI decodes the photo it is given in full, next to the model: a few-KB PNG claiming 13,000 x 13,000 px
+    takes gigabytes and would take Studio down for every business. The header gives the size without decoding;
+    too many pixels is refused, and a big photo is shrunk here (inside this worker's own memory) before it goes."""
+    with Image.open(io.BytesIO(data)) as image:
+        width, height = image.size
+        if width * height > MAX_SOURCE_PIXELS:
+            raise ApplicationError(f"the product photo is too large ({width} x {height}); use one under 60 megapixels",
+                                   type="SourcePhotoTooLarge", non_retryable=True)
+        if max(width, height) <= SOURCE_MAX_SIDE:
+            return data
+        image.draft("RGB", (SOURCE_MAX_SIDE, SOURCE_MAX_SIDE))  # JPEG decodes at a reduced scale; others ignore it
+        small = image.convert("RGB")
+        small.thumbnail((SOURCE_MAX_SIDE, SOURCE_MAX_SIDE), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        small.save(out, format="PNG")
+        return out.getvalue()
+
+
 async def upload_source_image(value: StudioInput) -> str:
     """ComfyUI's LoadImage reads from its own input folder: copy the business's uploaded photo there first."""
     data = await asyncio.to_thread(asset_store().get, value.source_image)
     with Image.open(io.BytesIO(data)) as opened:  # refuse anything that isn't a real image before it reaches ComfyUI
         opened.verify()
+    data = await asyncio.to_thread(fit_source_photo, data)
     digest = hashlib.sha256(data).hexdigest()[:16]
     response = await comfy_request("POST", "/upload/image", data={"subfolder": f"volumeos/{value.tenant_id}", "overwrite": "true", "type": "input"},
                                    files={"image": (f"{value.pack_id}-{digest}.png", data, "application/octet-stream")})
