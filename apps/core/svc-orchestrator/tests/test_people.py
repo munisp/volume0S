@@ -289,3 +289,20 @@ def test_creators_video_streams_to_readers():
         assert client.get(f"/v1/creators/projects/{PROJECT}/video/other.exe", headers=auth()).status_code in (400, 404, 422)
         assert client.post(f"/v1/creators/projects/{PROJECT}/jobs", headers=auth(), json={"kind": "assembly", "version": 1}).status_code == 403
     assert creators.calls[0][:3] == ("STREAM", f"/projects/{PROJECT}/video/video.mp4", "demo-tenant")
+
+
+def test_creators_youtube_status_for_readers_connect_and_disconnect_for_delivery():
+    reader = Claims("demo-tenant", "reader-sub", frozenset({"reader"}))
+    delivery = Claims("demo-tenant", "delivery-sub", frozenset({"delivery"}))
+    client, creators = creators_client(reader)
+    with client:
+        assert client.get(f"/v1/creators/channels/{PROJECT}/youtube", headers=auth()).status_code == 200
+        assert client.post(f"/v1/creators/channels/{PROJECT}/youtube/connect", headers=auth()).status_code == 403
+        assert client.delete(f"/v1/creators/channels/{PROJECT}/youtube", headers=auth()).status_code == 403
+        assert client.get("/v1/creators/channels/not-an-id/youtube", headers=auth()).status_code == 400
+    client, creators = creators_client(delivery)
+    with client:
+        assert client.post(f"/v1/creators/channels/{PROJECT}/youtube/connect", headers=auth()).status_code == 200
+        assert client.delete(f"/v1/creators/channels/{PROJECT}/youtube", headers=auth()).status_code == 200
+    assert [c[:4] for c in creators.calls] == [("POST", f"/channels/{PROJECT}/youtube/connect", "demo-tenant", "delivery-sub"),
+                                               ("DELETE", f"/channels/{PROJECT}/youtube", "demo-tenant", "delivery-sub")]

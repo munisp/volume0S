@@ -361,13 +361,17 @@ export type CreatorProject = {
     thumbnail?: { options: { angle: string; caption: string; prompt: string; text_side: string; key: string; seed: number }[]; chosen: number | null; made_at: string }
     voiceover?: { voice: string; speed: number; script_sha256: string; total_seconds: number; provider: string; updated_at: string;
       sections: { index: number; heading: string; key: string; seconds: number }[] }
+    youtube?: { video_id: string; url: string; studio_url: string; privacy: 'private' | 'unlisted' | 'public'; publish_at: string; channel: string; notes: string[]; uploaded_at: string }
     costs?: unknown[]
   }
 }
 
+export type CreatorYouTube = { configured: boolean; connected: boolean
+  youtube: { youtube_channel_id: string; title: string; handle: string; subscribers: number | null; connected_at: string } | null }
+
 export type CreatorEvent = { kind: string; stage: string; actor: string; detail: Record<string, unknown>; created_at: string }
 
-export type CreatorJob = { id: string; kind: 'script' | 'voiceover'; status: 'queued' | 'running' | 'done' | 'failed'; progress: string; error: string;
+export type CreatorJob = { id: string; kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly' | 'publish'; status: 'queued' | 'running' | 'done' | 'failed'; progress: string; error: string;
   params: Record<string, unknown>; attempts: number; created_at: string; started_at: string | null; finished_at: string | null }
 
 export type CreatorVoice = { id: string; name: string; gender: 'male' | 'female'; accent: string }

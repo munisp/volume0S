@@ -157,11 +157,11 @@ def script_record(text: str, duration_minutes: int, source: str) -> dict[str, An
 # (an approved title before the script; an approved script before the voice), and starting one sends everything
 # built on its stage back to not started.
 JOB_STAGE = {"script": "script", "voiceover": "voiceover", "scenes": "scenes", "images": "images", "thumbnail": "thumbnail",
-             "seo": "seo", "assembly": "assembly"}
+             "seo": "seo", "assembly": "assembly", "publish": "publishing"}
 # What has to be finished first: an approved title before the script, the approved script before the voice and the
 # thumbnail, the voiceover (its timings) before the scenes, the scenes before their images.
 JOB_NEEDS = {"script": "title", "voiceover": "script_approval", "scenes": "voiceover", "images": "scenes",
-             "thumbnail": "script_approval", "seo": "voiceover", "assembly": "images"}
+             "thumbnail": "script_approval", "seo": "voiceover", "assembly": "images", "publish": "final_review"}
 # Jobs whose result nothing later is built on: making them again resets nothing.
 SIDE_JOBS = {"thumbnail", "seo"}
 SCENE_WORDS = 25  # about 10 seconds of narration per scene

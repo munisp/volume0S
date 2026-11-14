@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-co
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml ./
-COPY main.py store.py model.py providers.py worker.py ./
+COPY main.py store.py model.py providers.py worker.py youtube.py ./
 COPY tests ./tests
 RUN pip install --no-cache-dir '.[test]' && python -m pytest && touch /tests-passed
 
@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-co
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml ./
-COPY main.py store.py model.py providers.py worker.py ./
+COPY main.py store.py model.py providers.py worker.py youtube.py ./
 RUN pip install --no-cache-dir . && useradd --uid 10001 --create-home volumeos
 COPY --from=test /tests-passed /app/.tests-passed
 USER 10001:10001

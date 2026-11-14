@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { useNavigate, useParams } from 'react-router'
-import { Check, Circle, CircleDot, Clapperboard, Download, Mic, Play, Plus, RefreshCw, RotateCcw, Sparkles, X } from 'lucide-react'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { Check, Circle, CircleDot, Clapperboard, Download, ExternalLink, Link2, Mic, Play, Plus, RefreshCw, RotateCcw, Sparkles, Unlink, Upload, X } from 'lucide-react'
 import { useSession, errorText } from '../state/session-context'
 import { allowed } from '../lib/access'
-import type { CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorScene, CreatorStage, CreatorVoice } from '../lib/types'
+import type { CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorScene, CreatorStage, CreatorVoice, CreatorYouTube } from '../lib/types'
 import { Confirm, Empty, Field, Modal, Note, PageHead, RoleNote, Submit, When } from '../components/ui'
 
 const DURATIONS = [5, 10, 15, 20, 30, 45]
@@ -13,7 +13,7 @@ const STATE_LABEL: Record<CreatorStage['state'], string> = {
 }
 const EVENT_LABEL: Record<string, string> = {
   created: 'Project created', title_set: 'Title chosen', script_saved: 'Script saved', approved: 'Approved',
-  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made', scenes_saved: 'Scenes planned', images_saved: 'Images made', thumbnails_saved: 'Thumbnails made', thumbnail_chosen: 'Thumbnail chosen', scene_edited: 'Scene edited', seo_saved: 'SEO package written', video_saved: 'Video made',
+  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made', scenes_saved: 'Scenes planned', images_saved: 'Images made', thumbnails_saved: 'Thumbnails made', thumbnail_chosen: 'Thumbnail chosen', scene_edited: 'Scene edited', seo_saved: 'SEO package written', video_saved: 'Video made', published: 'Uploaded to YouTube',
 }
 
 /** Offer 35 Creators Home: YouTube channels and their video projects, each moving through 12 production stages. */
@@ -28,6 +28,25 @@ export function CreatorsPage() {
   const [load, setLoad] = useState<{ state: 'loading' | 'ok' | 'error'; error: string | null }>({ state: 'loading', error: null })
   const [modal, setModal] = useState<'channel' | 'project' | null>(null)
   const [busy, setBusy] = useState(false)
+  const [search, setSearch] = useSearchParams()
+
+  // Back from Google's sign-in: say how it went and return to the video the person started from.
+  useEffect(() => {
+    const result = search.get('youtube')
+    if (!result) return
+    const messages: Record<string, [string, 'success' | 'error']> = {
+      connected: ['YouTube connected. Videos on this channel can now be uploaded from here.', 'success'],
+      cancelled: ['YouTube wasn\'t connected: the Google sign-in was cancelled.', 'error'],
+      failed: ['YouTube couldn\'t be connected. Try again; if it keeps failing, check the Google account owns the channel.', 'error'],
+      invalid: ['That YouTube sign-in link expired or wasn\'t valid. Start it again from the video.', 'error'],
+    }
+    const [message, tone] = messages[result] ?? messages.invalid
+    notify(tone, message)
+    let back = ''
+    try { back = window.sessionStorage.getItem('creators.youtube.return') ?? ''; window.sessionStorage.removeItem('creators.youtube.return') } catch { back = '' }
+    if (back && /^[0-9a-f-]{36}$/.test(back)) navigate(`/services/creators/${back}`, { replace: true })
+    else setSearch({}, { replace: true })
+  }, [search, setSearch, navigate, notify])
 
   const refresh = useCallback(async () => {
     try {
@@ -307,11 +326,14 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
       </ul>
       {stage('final_review').state === 'needs_approval' && canEdit && <div className="row" style={{ gap: 8 }}>
         <button className="button button-primary" disabled={busy || !project.record.thumbnail?.chosen || !project.record.seo}
-          onClick={() => void approve('final_review', 'Approved. Publishing to YouTube comes next.')}>Approve the final video</button>
+          onClick={() => void approve('final_review', 'Approved. You can upload it to YouTube now.')}>Approve the final video</button>
         {(!project.record.thumbnail?.chosen || !project.record.seo) && <span className="small muted">Choose a thumbnail and write the SEO package first.</span>}
       </div>}
-      {stage('final_review').state === 'approved' && <Note tone="done">Approved. Publishing to your YouTube channel arrives in the next release; until then download the MP4, captions and description above.</Note>}
     </div>}
+
+    {stage('final_review').state === 'approved' && <PublishSection project={project} canEdit={canEdit} busy={busy} progress={latest('publish')?.progress || ''}
+      onPublish={input => act(async () => { const r = await api.startCreatorJob(project.id, { kind: 'publish', ...input, version: project.version }); setJobs(current => [r.job, ...current]); return r.project },
+        'Uploading to YouTube. The link appears here when it is done.')} />}
 
     <div className="stack" aria-label="History">
       <strong>History</strong>
@@ -423,6 +445,83 @@ function ScenesSection({ project, canEdit, busy, running, onPlan, onImages, onRe
         </>}
       </div>)}
     </div>
+  </div>
+}
+
+function PublishSection({ project, canEdit, busy, progress, onPublish }: {
+  project: CreatorProject; canEdit: boolean; busy: boolean; progress: string
+  onPublish: (input: { privacy: 'private' | 'unlisted' | 'public'; publish_at: string; made_for_kids: boolean }) => Promise<void>
+}) {
+  const { api, notify } = useSession()
+  const [link, setLink] = useState<CreatorYouTube | null>(null)
+  const [privacy, setPrivacy] = useState<'private' | 'unlisted' | 'public'>('private')
+  const [when, setWhen] = useState('')
+  const [tooSoon, setTooSoon] = useState(false)
+  const [kids, setKids] = useState<'' | 'yes' | 'no'>('')
+  const [confirm, setConfirm] = useState(false)
+  const [working, setWorking] = useState(false)
+  const stage = project.stages.find(s => s.key === 'publishing')!
+  const done = project.record.youtube
+  const channelId = project.channel_id
+
+  const load = useCallback(() => { api.creatorYouTube(channelId).then(setLink, () => setLink(null)) }, [api, channelId])
+  useEffect(() => { const t = window.setTimeout(load, 0); return () => window.clearTimeout(t) }, [load])
+
+  async function connect() {
+    setWorking(true)
+    try {
+      const { url } = await api.connectCreatorYouTube(channelId)
+      try { window.sessionStorage.setItem('creators.youtube.return', project.id) } catch { /* only used to come back to this video */ }
+      window.location.assign(url)
+    } catch (error) { notify('error', errorText(error)); setWorking(false) }
+  }
+  async function disconnect() {
+    setWorking(true)
+    try { await api.disconnectCreatorYouTube(channelId); notify('success', 'YouTube disconnected; Google\'s access for VolumeOS is revoked.'); load() }
+    catch (error) { notify('error', errorText(error)) } finally { setWorking(false) }
+  }
+  const scheduled = when ? new Date(when) : null
+  const badTime = Boolean(scheduled && (Number.isNaN(scheduled.getTime()) || tooSoon))
+  const info = link?.youtube
+
+  return <div className="stack" aria-label="Publishing">
+    <strong>12 · YouTube publishing</strong>
+    {done && <Note tone="done">Uploaded to {done.channel} as {done.privacy}{done.publish_at ? `, goes public ${new Date(done.publish_at).toLocaleString()}` : ''}.{' '}
+      <a href={done.url} target="_blank" rel="noreferrer">{done.url} <ExternalLink size={12} /></a> · <a href={done.studio_url} target="_blank" rel="noreferrer">Open in YouTube Studio</a>
+      {done.notes.length > 0 && <> · Not everything went through: {done.notes.join('; ')}</>}</Note>}
+    {stage.state === 'running' && <Note>Uploading… {progress || 'queued'}.</Note>}
+    {stage.state === 'failed' && <Note tone="failed">The upload didn't finish: {stage.note}</Note>}
+    {link && !link.configured && <p className="small muted">Uploading to YouTube isn't switched on for this workspace yet. Download the MP4, captions and description above and upload them in YouTube Studio meanwhile.</p>}
+    {link?.configured && !link.connected && <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      {canEdit ? <button className="button button-primary" disabled={working} onClick={() => void connect()}><Link2 size={14} /> Connect YouTube</button> : null}
+      <span className="small muted">Sign in with the Google account that owns the channel. VolumeOS can then upload videos, set thumbnails and add captions; nothing is posted without your click.</span>
+    </div>}
+    {info && <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span>Linked to <strong>{info.title}</strong>{info.handle ? ` (${info.handle})` : ''}{info.subscribers != null ? ` · ${info.subscribers.toLocaleString()} subscribers` : ''}</span>
+      {canEdit && <button className="button button-secondary" disabled={working} onClick={() => void disconnect()}><Unlink size={14} /> Disconnect</button>}
+    </div>}
+    {info && canEdit && !done && stage.state !== 'running' && <>
+      <div className="form-grid">
+        <label className="field"><span>Visibility</span>
+          <select value={privacy} disabled={Boolean(when)} onChange={e => setPrivacy(e.target.value as typeof privacy)}>
+            <option value="private">Private (only you)</option><option value="unlisted">Unlisted (anyone with the link)</option><option value="public">Public</option>
+          </select>{when && <small>Scheduled videos stay private until the time, then go public.</small>}</label>
+        <label className="field"><span>Schedule (optional)</span><input type="datetime-local" value={when} onChange={e => { setWhen(e.target.value); setTooSoon(Boolean(e.target.value) && new Date(e.target.value).getTime() < Date.now() + 15 * 60000) }} />
+          {badTime && <small>Pick a time at least 15 minutes from now.</small>}</label>
+      </div>
+      <fieldset className="field"><span>Is this video made for kids? (YouTube requires an answer)</span>
+        <label className="row" style={{ gap: 6 }}><input type="radio" name="kids" checked={kids === 'no'} onChange={() => setKids('no')} /> No, it's not made for kids</label>
+        <label className="row" style={{ gap: 6 }}><input type="radio" name="kids" checked={kids === 'yes'} onChange={() => setKids('yes')} /> Yes, it's made for kids</label>
+      </fieldset>
+      <div className="row" style={{ gap: 8 }}>
+        <button className="button button-primary" disabled={busy || !kids || badTime} onClick={() => setConfirm(true)}><Upload size={14} /> Upload to YouTube</button>
+      </div>
+    </>}
+    {confirm && <Confirm title="Upload to YouTube?" confirmLabel="Upload" busy={busy} onCancel={() => setConfirm(false)}
+      onConfirm={() => void onPublish({ privacy: when ? 'private' : privacy, publish_at: scheduled && !badTime ? scheduled.toISOString() : '', made_for_kids: kids === 'yes' }).then(() => setConfirm(false))}>
+      <p>“{project.title}” goes to {info?.title} as {when ? `private, public at ${scheduled?.toLocaleString()}` : privacy}, with the chosen thumbnail, the description, tags and chapters, and the captions.
+        {project.record.video ? ` About ${Math.max(1, Math.round(project.record.video.bytes / 1e6 / 20))} minutes to upload.` : ''}</p>
+    </Confirm>}
   </div>
 }
 

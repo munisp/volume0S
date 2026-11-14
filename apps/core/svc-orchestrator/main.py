@@ -534,6 +534,20 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         """Writing the script or voicing the approved script: started by a person, named in the history."""
         return await creators_service().call("POST", f"/projects/{project_id}/jobs", claims.tenant_id, claims.actor, body)
 
+    @app.get("/v1/creators/channels/{channel_id}/youtube")
+    async def creator_youtube(channel_id: CreatorId, claims: Claims = Depends(need("reader"))):
+        """Whether the channel is linked to a YouTube channel (never the Google tokens)."""
+        return await creators_service().call("GET", f"/channels/{channel_id}/youtube", claims.tenant_id, claims.actor)
+
+    @app.post("/v1/creators/channels/{channel_id}/youtube/connect")
+    async def connect_creator_youtube(channel_id: CreatorId, claims: Claims = Depends(need("delivery"))):
+        """The Google sign-in address; Google sends the person back to svc-creators' public callback."""
+        return await creators_service().call("POST", f"/channels/{channel_id}/youtube/connect", claims.tenant_id, claims.actor)
+
+    @app.delete("/v1/creators/channels/{channel_id}/youtube")
+    async def disconnect_creator_youtube(channel_id: CreatorId, claims: Claims = Depends(need("delivery"))):
+        return await creators_service().call("DELETE", f"/channels/{channel_id}/youtube", claims.tenant_id, claims.actor)
+
     @app.get("/v1/creators/projects/{project_id}/jobs")
     async def creator_jobs(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
         return await creators_service().call("GET", f"/projects/{project_id}/jobs", claims.tenant_id, claims.actor)

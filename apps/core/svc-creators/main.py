@@ -17,12 +17,13 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import model
 from model import ProjectError
 from providers import AudioStore, ProviderError, VoiceService
+import youtube as yt
 from store import PostgresCreatorStore
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
@@ -105,7 +106,11 @@ class ScriptInput(InputModel):
 
 
 class JobInput(InputModel):
-    kind: Literal["script", "voiceover", "scenes", "images", "thumbnail", "seo", "assembly"]
+    kind: Literal["script", "voiceover", "scenes", "images", "thumbnail", "seo", "assembly", "publish"]
+    privacy: Literal["private", "unlisted", "public"] = "private"   # publish
+    publish_at: str = Field(default="", max_length=40)              # publish: ISO time to go public (scheduled)
+    made_for_kids: bool = False
+    category_id: str = Field(default="27", pattern=r"^\d{1,3}$")    # 27 Education, 22 People & Blogs
     burn_subtitles: bool = False  # assembly: subtitles in the picture as well as the separate captions file
     scenes: list[int] = Field(default_factory=list, max_length=500)  # images: only these scenes (empty: all)
     voice: str = Field(default="", max_length=40, pattern=r"^([a-z]{2}_[a-z]{2,20})?$")
@@ -146,7 +151,7 @@ def view(project: dict[str, Any]) -> dict[str, Any]:
                       "target_words": model.target_words(project["duration_minutes"])}
 
 
-def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> FastAPI:
+def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube: Any = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app.state.store is None:
@@ -155,12 +160,15 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> Fast
             app.state.voices = VoiceService.from_env()
         if app.state.audio is None:
             app.state.audio = AudioStore.from_env()
+        if app.state.youtube is None:
+            app.state.youtube = yt.YouTube.from_env()
         yield
         if hasattr(app.state.store, "close"):
             await app.state.store.close()
 
     app = FastAPI(title="VolumeOS Creators Home", lifespan=lifespan)
-    app.state.store, app.state.voices, app.state.audio = store, voices, audio
+    app.state.store, app.state.voices, app.state.audio, app.state.youtube = store, voices, audio, youtube
+    console = os.environ.get("CONSOLE_URL", "https://volumeos.newfire.app").rstrip("/")
     token = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
 
     def caller(request: Request) -> tuple[str, str] | JSONResponse:
@@ -407,6 +415,24 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> Fast
                 return error(400, "invalid_request", "those scenes aren't in this video")
             partial = bool(body.scenes) and project["stages"]["images"]["state"] in model.FINISHED
             params = {"scenes": sorted(set(body.scenes))}
+        if body.kind == "publish":
+            channel_link = await app.state.store.youtube(tenant, project["channel_id"])
+            if app.state.youtube is None or channel_link is None:
+                return error(409, "youtube_not_connected", "connect this channel's YouTube account first")
+            if not (project["record"].get("video") or {}).get("key") or not (project["record"].get("thumbnail") or {}).get("chosen") or not project["record"].get("seo"):
+                return error(409, "earlier_stage_open", "the video, a chosen thumbnail and the SEO package are needed")
+            from datetime import datetime, timezone
+            when = None
+            if body.publish_at:
+                try:
+                    when = datetime.fromisoformat(body.publish_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+                except ValueError:
+                    return error(400, "invalid_request", "publish_at must be an ISO date and time")
+                if when <= datetime.now(timezone.utc):
+                    return error(400, "invalid_request", "a scheduled time must be in the future")
+            # YouTube only schedules private videos; they turn public at publish_at.
+            params = {"privacy": "private" if when else body.privacy, "publish_at": when.isoformat().replace("+00:00", "Z") if when else "",
+                      "made_for_kids": body.made_for_kids, "category_id": body.category_id, "youtube_channel_id": channel_link["youtube_channel_id"]}
         if body.kind == "assembly":
             if any(not (sc.get("image") or {}).get("key") for sc in project["record"].get("scenes") or []):
                 return error(409, "earlier_stage_open", "every scene needs an image first")
@@ -555,6 +581,66 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> Fast
         filename = f"{(project['title'] or 'video')[:60]}{'.mp4' if name == 'video.mp4' else '.srt'}".replace('"', "")
         return StreamingResponse(chunks, media_type="video/mp4" if name == "video.mp4" else "application/x-subrip",
                                  headers={"Content-Length": str(size), "Content-Disposition": f'attachment; filename="{filename}"'})
+
+    # YouTube ------------------------------------------------------------------------------------------------------
+    @app.get("/v1/creators/channels/{channel_id}/youtube")
+    async def youtube_status(channel_id: str, request: Request):
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        if not channel_id_ok(channel_id) or not await app.state.store.channel(who[0], channel_id):
+            return error(404, "not_found", "no such channel in this business")
+        link = await app.state.store.youtube(who[0], channel_id)
+        return {"configured": app.state.youtube is not None, "connected": link is not None,
+                "youtube": {k: link[k] for k in ("youtube_channel_id", "title", "handle", "subscribers", "connected_at")} if link else None}
+
+    @app.post("/v1/creators/channels/{channel_id}/youtube/connect")
+    async def youtube_connect(channel_id: str, request: Request):
+        """The Google sign-in address for this channel; the state names the business, channel and person."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        tenant, actor = who
+        if app.state.youtube is None:
+            return error(503, "youtube_not_configured", "YouTube isn't set up on this deployment yet (no Google OAuth client)")
+        if not actor:
+            return error(400, "actor_required", "connecting must name the person doing it")
+        if not channel_id_ok(channel_id) or not await app.state.store.channel(tenant, channel_id):
+            return error(404, "not_found", "no such channel in this business")
+        return {"url": app.state.youtube.authorize_url(yt.sign_state(tenant, channel_id, actor))}
+
+    @app.get("/v1/creators/youtube/callback")
+    async def youtube_callback(code: str = "", state: str = "", error_: str = Query(default="", alias="error")):
+        """Google sends the browser back here (public route). Only a valid, unexpired signed state is acted on."""
+        found = yt.read_state(state) if state else None
+        if found is None:
+            return RedirectResponse(f"{console}/services/creators?youtube=invalid", status_code=303)
+        back = f"{console}/services/creators?channel={found['channel_id']}&youtube="
+        if error_ or not code or app.state.youtube is None:
+            return RedirectResponse(back + "cancelled", status_code=303)
+        try:
+            tokens = await app.state.youtube.exchange(code)
+            info = await app.state.youtube.my_channel(tokens["access_token"])
+            await app.state.store.save_youtube(found["tenant"], found["channel_id"], info, yt.seal(tokens["refresh_token"]), found["actor"])
+        except yt.YouTubeError:
+            return RedirectResponse(back + "failed", status_code=303)
+        return RedirectResponse(back + "connected", status_code=303)
+
+    @app.delete("/v1/creators/channels/{channel_id}/youtube")
+    async def youtube_disconnect(channel_id: str, request: Request):
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        link = channel_id_ok(channel_id) and await app.state.store.youtube(who[0], channel_id)
+        if not link:
+            return error(404, "not_found", "this channel has no YouTube connection")
+        if app.state.youtube is not None:
+            try:
+                await app.state.youtube.revoke(yt.unseal(link["refresh_token_sealed"]))
+            except Exception:  # noqa: BLE001 - the link is removed whatever Google says
+                pass
+        await app.state.store.delete_youtube(who[0], channel_id)
+        return {"status": "disconnected"}
 
     @app.get("/v1/creators/projects/{project_id}/events")
     async def events(project_id: str, request: Request, limit: int = Query(default=100, ge=1, le=500)):

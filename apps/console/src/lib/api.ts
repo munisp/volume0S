@@ -4,7 +4,7 @@ import type {
   Checkout, CollectionReceipt, CollectionResolution, ExportResponse, Offer, PartnerStatement,
   StudioAssetResponse, StudioSnapshot, Subscription, Tenant, TrialBalance, Workspace, TenantSummary, Person,
   OfferJobSnapshot, ConversationQueueItem, ConversationDraft, EngagementSnapshot, EngagementStartInput,
-  CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorVoice,
+  CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorVoice, CreatorYouTube,
 } from './types'
 import { plainError } from './messages.ts'
 
@@ -188,7 +188,8 @@ export class VolumeOSApi {
     return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/stages/${encodeURIComponent(stage)}/${action}`, { method: 'POST', body: { note, version } })
   }
 
-  startCreatorJob(id: string, input: { kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly'; voice?: string; speed?: number; scenes?: number[]; burn_subtitles?: boolean; version: number }) {
+  startCreatorJob(id: string, input: { kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly' | 'publish'; voice?: string; speed?: number; scenes?: number[]; burn_subtitles?: boolean
+    privacy?: 'private' | 'unlisted' | 'public'; publish_at?: string; made_for_kids?: boolean; version: number }) {
     return this.request<{ project: CreatorProject; job: CreatorJob }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/jobs`, { method: 'POST', body: input })
   }
 
@@ -214,6 +215,16 @@ export class VolumeOSApi {
 
   /** The finished video or its captions, downloaded with the user's token (minutes for a long video). */
   creatorVideo(id: string, name: 'video.mp4' | 'captions.srt') { return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/video/${name}`, undefined, 900000) }
+
+  creatorYouTube(channelId: string) { return this.request<CreatorYouTube>(this.orchestratorUrl, `/v1/creators/channels/${encodeURIComponent(channelId)}/youtube`) }
+
+  connectCreatorYouTube(channelId: string) {
+    return this.request<{ url: string }>(this.orchestratorUrl, `/v1/creators/channels/${encodeURIComponent(channelId)}/youtube/connect`, { method: 'POST' })
+  }
+
+  disconnectCreatorYouTube(channelId: string) {
+    return this.request<{ status: string }>(this.orchestratorUrl, `/v1/creators/channels/${encodeURIComponent(channelId)}/youtube`, { method: 'DELETE' })
+  }
 
   creatorEvents(id: string) { return this.request<{ events: CreatorEvent[] }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/events`) }
 

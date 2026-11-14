@@ -111,6 +111,28 @@ ALTER TABLE creator_jobs ADD CONSTRAINT creator_jobs_kind_check CHECK (kind IN (
 ALTER TABLE creator_jobs DROP CONSTRAINT IF EXISTS creator_jobs_kind_check;
 ALTER TABLE creator_jobs ADD CONSTRAINT creator_jobs_kind_check
     CHECK (kind IN ('script','voiceover','scenes','images','thumbnail','seo','assembly'));
+"""), ("005_youtube", """
+ALTER TABLE creator_jobs DROP CONSTRAINT IF EXISTS creator_jobs_kind_check;
+ALTER TABLE creator_jobs ADD CONSTRAINT creator_jobs_kind_check
+    CHECK (kind IN ('script','voiceover','scenes','images','thumbnail','seo','assembly','publish'));
+CREATE TABLE IF NOT EXISTS creator_youtube (
+    tenant_id text NOT NULL,
+    channel_id uuid NOT NULL,
+    youtube_channel_id text NOT NULL,
+    title text NOT NULL DEFAULT '',
+    handle text NOT NULL DEFAULT '',
+    subscribers bigint NOT NULL DEFAULT 0,
+    refresh_token_sealed bytea NOT NULL,
+    connected_by text NOT NULL DEFAULT '',
+    connected_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, channel_id),
+    FOREIGN KEY (tenant_id, channel_id) REFERENCES creator_channels (tenant_id, id) ON DELETE CASCADE
+);
+ALTER TABLE creator_youtube ENABLE ROW LEVEL SECURITY;
+ALTER TABLE creator_youtube FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON creator_youtube;
+CREATE POLICY tenant_isolation ON creator_youtube USING (tenant_id = current_setting('volumeos.tenant_id', true))
+    WITH CHECK (tenant_id = current_setting('volumeos.tenant_id', true));
 """)]
 
 CHANNEL_FIELDS = ("name", "youtube_handle", "niche", "audience", "language", "writing_instructions", "visual_preset",
@@ -341,6 +363,26 @@ class PostgresCreatorStore:
                              uuid.UUID(job_id), "done" if ok else "failed", error[:1000])
 
 
+    # YouTube connections -------------------------------------------------------------------------------------------
+    async def youtube(self, tenant: str, channel_id: str) -> dict[str, Any] | None:
+        async with self.tenant_tx(tenant) as tx:
+            row = await tx.fetchrow("SELECT * FROM creator_youtube WHERE channel_id=$1", uuid.UUID(channel_id))
+        return dict(row) | {"channel_id": str(row["channel_id"]), "connected_at": _iso(row["connected_at"])} if row else None
+
+    async def save_youtube(self, tenant: str, channel_id: str, info: dict[str, Any], sealed: bytes, actor: str) -> None:
+        async with self.tenant_tx(tenant) as tx:
+            await tx.execute(
+                "INSERT INTO creator_youtube (tenant_id, channel_id, youtube_channel_id, title, handle, subscribers, refresh_token_sealed, connected_by)"
+                " VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant_id, channel_id) DO UPDATE SET youtube_channel_id=EXCLUDED.youtube_channel_id,"
+                " title=EXCLUDED.title, handle=EXCLUDED.handle, subscribers=EXCLUDED.subscribers, refresh_token_sealed=EXCLUDED.refresh_token_sealed,"
+                " connected_by=EXCLUDED.connected_by, connected_at=now()", tenant, uuid.UUID(channel_id), info["youtube_channel_id"],
+                info["title"], info["handle"], info["subscribers"], sealed, actor)
+
+    async def delete_youtube(self, tenant: str, channel_id: str) -> None:
+        async with self.tenant_tx(tenant) as tx:
+            await tx.execute("DELETE FROM creator_youtube WHERE channel_id=$1", uuid.UUID(channel_id))
+
+
 class InMemoryCreatorStore:
     """The same contract for tests: every lookup is by tenant, as the database's row security enforces."""
 
@@ -349,6 +391,7 @@ class InMemoryCreatorStore:
         self.project_rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.event_rows: list[dict[str, Any]] = []
         self.job_rows: dict[str, dict[str, Any]] = {}
+        self.youtube_rows: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def ready(self) -> None:
         return None
@@ -443,3 +486,13 @@ class InMemoryCreatorStore:
 
     async def finish_job(self, tenant, job_id, ok, error=""):
         self.job_rows[job_id].update(status="done" if ok else "failed", error=error, finished_at=now())
+
+    async def youtube(self, tenant, channel_id):
+        found = self.youtube_rows.get((tenant, channel_id))
+        return copy.deepcopy(found) if found else None
+
+    async def save_youtube(self, tenant, channel_id, info, sealed, actor):
+        self.youtube_rows[(tenant, channel_id)] = dict(info, channel_id=channel_id, refresh_token_sealed=sealed, connected_by=actor, connected_at=now())
+
+    async def delete_youtube(self, tenant, channel_id):
+        self.youtube_rows.pop((tenant, channel_id), None)

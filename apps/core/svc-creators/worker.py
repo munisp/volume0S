@@ -17,6 +17,7 @@ import model
 from providers import (AudioStore, ImageService, OllamaWriter, ProviderError, RenderService, VoiceService, caption_thumbnail,
                        captions, chapter_marks, characters, chunks_for_speech, image_prompt, join_wavs, scene_visuals, seo_package,
                        thumbnail_concepts, to_jpeg)
+import youtube as yt
 from store import PostgresCreatorStore
 
 log = logging.getLogger("creators-worker")
@@ -64,8 +65,9 @@ def scene_spans(planned: list[float], target: float, floor: float = 0.2) -> list
 
 
 class Worker:
-    def __init__(self, store: Any, writer: Any, voices: Any, audio: Any, images: Any = None, renderer: Any = None):
+    def __init__(self, store: Any, writer: Any, voices: Any, audio: Any, images: Any = None, renderer: Any = None, youtube: Any = None):
         self.store, self.writer, self.voices, self.audio, self.images, self.renderer = store, writer, voices, audio, images, renderer
+        self.youtube = youtube
         self.current: dict[str, Any] | None = None  # the job in hand (handed back if the worker is stopped)
         self.last_progress = ""
 
@@ -309,6 +311,52 @@ class Worker:
         await self.save(tenant, pid, apply, {"kind": "video_saved", "stage": "assembly", "detail": {"seconds": record["seconds"], "bytes": size}})
         return f"{round(record['seconds'] / 60, 1)} min video"
 
+    async def run_publish(self, job: dict[str, Any]) -> str:
+        """Uploads the approved video with its title, description, tags, privacy (or schedule), then the chosen
+        thumbnail and the captions. The video is read from storage in chunks."""
+        if self.youtube is None:
+            raise ProviderError("YouTube isn't set up")
+        tenant, pid, params = job["tenant_id"], job["project_id"], job["params"]
+        project = await self.store.project(tenant, pid)
+        link = await self.store.youtube(tenant, project["channel_id"])
+        if link is None or link["youtube_channel_id"] != params["youtube_channel_id"]:
+            raise ProviderError("the channel's YouTube connection changed; connect it again")
+        seo, video, thumb = project["record"]["seo"], project["record"]["video"], project["record"]["thumbnail"]
+        try:
+            token = await self.youtube.access_token(yt.unseal(link["refresh_token_sealed"]))
+            status: dict[str, Any] = {"privacyStatus": params["privacy"], "selfDeclaredMadeForKids": bool(params["made_for_kids"])}
+            if params.get("publish_at"):
+                status["publishAt"] = params["publish_at"]
+            metadata = {"snippet": {"title": project["title"][:100], "description": seo["full_description"][:5000],
+                                    "tags": seo["tags"], "categoryId": params.get("category_id", "27")}, "status": status}
+            await self.progress(job, f"uploading the video ({round(video['bytes'] / 1e6)} MB)")
+            size, chunks = await self.audio.stream(video["key"])
+            video_id = await self.youtube.upload(token, metadata, size, chunks)
+            notes = []
+            await self.progress(job, "setting the thumbnail")
+            try:
+                await self.youtube.set_thumbnail(token, video_id, to_jpeg(await self.audio.get(thumb["options"][thumb["chosen"] - 1]["key"]), 90))
+            except yt.YouTubeError as exc:
+                notes.append(str(exc))
+            await self.progress(job, "adding the captions")
+            try:
+                await self.youtube.add_captions(token, video_id, await self.audio.get(video["captions_key"]))
+            except yt.YouTubeError as exc:
+                notes.append(str(exc))
+        except yt.YouTubeError as exc:
+            raise ProviderError(str(exc)) from exc
+        record = {"video_id": video_id, "url": f"https://youtu.be/{video_id}", "studio_url": f"https://studio.youtube.com/video/{video_id}/edit",
+                  "privacy": params["privacy"], "publish_at": params.get("publish_at", ""), "channel": link["title"],
+                  "notes": notes, "uploaded_at": model.now()}
+
+        def apply(p: dict[str, Any]) -> None:
+            if p["stages"]["publishing"]["state"] != "running":
+                raise ProviderError("the publishing stage was changed meanwhile")
+            p["record"]["youtube"] = record
+            model.finish_job(p["stages"], "publish", True, f"uploaded {params['privacy']}" + (f", goes public {params['publish_at']}" if params.get("publish_at") else ""))
+        await self.save(tenant, pid, apply, {"kind": "published", "stage": "publishing", "detail": {"video_id": video_id, "privacy": params["privacy"]}})
+        return f"YouTube {video_id}"
+
     async def fail(self, job: dict[str, Any], reason: str) -> None:
         def apply(p: dict[str, Any]) -> None:
             if p["stages"][model.JOB_STAGE[job["kind"]]]["state"] == "running":
@@ -331,7 +379,7 @@ class Worker:
         try:
             runner = {"script": self.run_script, "voiceover": self.run_voiceover, "scenes": self.run_scenes,
                       "images": self.run_images, "thumbnail": self.run_thumbnail, "seo": self.run_seo,
-                      "assembly": self.run_assembly}[job["kind"]]
+                      "assembly": self.run_assembly, "publish": self.run_publish}[job["kind"]]
             done = await runner(job)
             await self.store.finish_job(job["tenant_id"], job["id"], True)
             log.info("job %s done: %s", job["id"], done)
@@ -375,7 +423,7 @@ async def main() -> None:
     voices, audio = VoiceService.from_env(), AudioStore.from_env()
     if voices is None or audio is None:
         raise SystemExit("TTS_URL, CREATORS_TTS_TOKEN and ASSET_BUCKET are required")
-    worker = Worker(store, OllamaWriter.from_env(), voices, audio, ImageService.from_env(), RenderService.from_env())
+    worker = Worker(store, OllamaWriter.from_env(), voices, audio, ImageService.from_env(), RenderService.from_env(), yt.YouTube.from_env())
     log.info("creators-worker ready (script model %s)", worker.writer.model)
     import signal
     stop = asyncio.Event()
