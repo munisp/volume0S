@@ -121,6 +121,26 @@ class YouTube:
         return {"youtube_channel_id": item["id"], "title": item["snippet"].get("title", ""),
                 "handle": item["snippet"].get("customUrl", ""), "subscribers": int(item.get("statistics", {}).get("subscriberCount", 0) or 0)}
 
+    async def recent_videos(self, access_token: str, channel_id: str, limit: int = 15) -> list[dict[str, Any]]:
+        """The channel's latest uploads with their public statistics (3 API units)."""
+        auth = {"Authorization": f"Bearer {access_token}"}
+        async with self.client() as c:
+            r = await c.get(f"{API}/channels", params={"part": "contentDetails", "id": channel_id}, headers=auth)
+            items = r.json().get("items", []) if r.status_code == 200 else []
+            if not items:
+                raise YouTubeError("YouTube didn't return the channel")
+            uploads = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+            r = await c.get(f"{API}/playlistItems", params={"part": "contentDetails", "playlistId": uploads, "maxResults": limit}, headers=auth)
+            ids = [i["contentDetails"]["videoId"] for i in (r.json().get("items", []) if r.status_code == 200 else [])]
+            if not ids:
+                return []
+            r = await c.get(f"{API}/videos", params={"part": "snippet,statistics", "id": ",".join(ids)}, headers=auth)
+            if r.status_code != 200:
+                raise YouTubeError(f"YouTube didn't return the videos ({r.status_code})")
+        return [{"id": v["id"], "title": v["snippet"].get("title", ""), "published_at": v["snippet"]["publishedAt"],
+                 "views": int(v.get("statistics", {}).get("viewCount", 0) or 0), "likes": int(v.get("statistics", {}).get("likeCount", 0) or 0),
+                 "comments": int(v.get("statistics", {}).get("commentCount", 0) or 0)} for v in r.json().get("items", [])]
+
     async def upload(self, access_token: str, metadata: dict[str, Any], size: int, chunks: AsyncIterator[bytes]) -> str:
         """Resumable upload: open a session with the metadata, then send the file in 8 MB pieces."""
         headers = {"Authorization": f"Bearer {access_token}", "X-Upload-Content-Type": "video/mp4", "X-Upload-Content-Length": str(size)}

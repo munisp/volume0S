@@ -514,6 +514,11 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     async def creator_project(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
         return await creators_service().call("GET", f"/projects/{project_id}", claims.tenant_id, claims.actor)
 
+    @app.get("/v1/creators/projects/{project_id}/launch")
+    async def creator_launch(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
+        """Title score, launch checklist, upload times and (with YouTube connected) the channel's real baseline."""
+        return await creators_service().call("GET", f"/projects/{project_id}/launch", claims.tenant_id, claims.actor)
+
     @app.patch("/v1/creators/projects/{project_id}")
     async def update_creator_project(project_id: CreatorId, body: CreatorBody, claims: Claims = Depends(need("delivery"))):
         return await creators_service().call("PATCH", f"/projects/{project_id}", claims.tenant_id, claims.actor, body)

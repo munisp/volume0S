@@ -306,3 +306,11 @@ def test_creators_youtube_status_for_readers_connect_and_disconnect_for_delivery
         assert client.delete(f"/v1/creators/channels/{PROJECT}/youtube", headers=auth()).status_code == 200
     assert [c[:4] for c in creators.calls] == [("POST", f"/channels/{PROJECT}/youtube/connect", "demo-tenant", "delivery-sub"),
                                                ("DELETE", f"/channels/{PROJECT}/youtube", "demo-tenant", "delivery-sub")]
+
+
+def test_creators_launch_plan_is_readable_by_any_role():
+    client, creators = creators_client(Claims("demo-tenant", "reader-sub", frozenset({"reader"})))
+    with client:
+        assert client.get(f"/v1/creators/projects/{PROJECT}/launch", headers=auth()).status_code == 200
+        assert client.get("/v1/creators/projects/nope/launch", headers=auth()).status_code == 400
+    assert creators.calls[0][:2] == ("GET", f"/projects/{PROJECT}/launch")

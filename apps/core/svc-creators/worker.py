@@ -14,9 +14,10 @@ import os
 from typing import Any
 
 import model
-from providers import (AudioStore, ImageService, OllamaWriter, ProviderError, RenderService, VoiceService, caption_thumbnail,
+from providers import (_json_chat, AudioStore, ImageService, OllamaWriter, ProviderError, RenderService, VoiceService, caption_thumbnail,
                        captions, chapter_marks, characters, chunks_for_speech, image_prompt, join_wavs, scene_visuals, seo_package,
                        thumbnail_concepts, to_jpeg)
+import research as rs
 import youtube as yt
 from store import PostgresCreatorStore
 
@@ -46,6 +47,9 @@ def brief(project: dict[str, Any]) -> str:
         lines.append(f"This video's audience: {project['audience']}")
     if project.get("style"):
         lines.append(f"Style for this video: {project['style']}")
+    notes = rs.research_notes((project.get("record") or {}).get("research"))
+    if notes:
+        lines.append(notes)
     return "\n".join(lines)
 
 
@@ -96,6 +100,28 @@ class Worker:
                 await self.store.job_progress(job["tenant_id"], job["id"], self.last_progress)
             except Exception:  # noqa: BLE001 - a missed beat only shortens the lease
                 log.warning("lease renewal failed for job %s", job["id"])
+
+    async def run_research(self, job: dict[str, Any]) -> str:
+        """Angles, viewer questions, points to cover, search keywords and scored title options. Suggestions only:
+        the creator still picks (or types) the title and approves it."""
+        tenant, pid = job["tenant_id"], job["project_id"]
+        project = await self.store.project(tenant, pid)
+        channel = await self.store.channel(tenant, project["channel_id"]) or {}
+        await self.progress(job, "researching angles, questions and titles")
+        system = ("You are a YouTube strategist who researches videos before they are made. You know what this audience "
+                  "searches for and clicks, and you never invent statistics or sources.")
+        found = rs.parse_research(await _json_chat(self.writer, system, rs.research_ask(project, channel), 3000), project.get("title", ""))
+        found["model"], found["made_at"] = getattr(self.writer, "model", "model"), model.now()
+
+        def apply(p: dict[str, Any]) -> None:
+            if p["stages"]["research"]["state"] != "running":
+                raise ProviderError("the research stage was changed meanwhile; result discarded")
+            p["record"]["research"] = found
+            title = p["record"].setdefault("title", {})
+            title["options"] = [t["title"] for t in found["titles"]]
+            model.finish_job(p["stages"], "research", True, f"{len(found['titles'])} titles, best scores {found['titles'][0]['score']}")
+        await self.save(tenant, pid, apply, {"kind": "research_saved", "stage": "research", "detail": {"titles": len(found["titles"])}})
+        return f"{len(found['titles'])} titles"
 
     async def run_script(self, job: dict[str, Any]) -> str:
         tenant, pid = job["tenant_id"], job["project_id"]
@@ -379,7 +405,7 @@ class Worker:
         try:
             runner = {"script": self.run_script, "voiceover": self.run_voiceover, "scenes": self.run_scenes,
                       "images": self.run_images, "thumbnail": self.run_thumbnail, "seo": self.run_seo,
-                      "assembly": self.run_assembly, "publish": self.run_publish}[job["kind"]]
+                      "assembly": self.run_assembly, "publish": self.run_publish, "research": self.run_research}[job["kind"]]
             done = await runner(job)
             await self.store.finish_job(job["tenant_id"], job["id"], True)
             log.info("job %s done: %s", job["id"], done)

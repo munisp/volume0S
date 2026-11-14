@@ -156,14 +156,14 @@ def script_record(text: str, duration_minutes: int, source: str) -> dict[str, An
 # Jobs: work the creators worker does for a stage. A job can only start when the stages before its stage are finished
 # (an approved title before the script; an approved script before the voice), and starting one sends everything
 # built on its stage back to not started.
-JOB_STAGE = {"script": "script", "voiceover": "voiceover", "scenes": "scenes", "images": "images", "thumbnail": "thumbnail",
+JOB_STAGE = {"research": "research", "script": "script", "voiceover": "voiceover", "scenes": "scenes", "images": "images", "thumbnail": "thumbnail",
              "seo": "seo", "assembly": "assembly", "publish": "publishing"}
 # What has to be finished first: an approved title before the script, the approved script before the voice and the
 # thumbnail, the voiceover (its timings) before the scenes, the scenes before their images.
-JOB_NEEDS = {"script": "title", "voiceover": "script_approval", "scenes": "voiceover", "images": "scenes",
+JOB_NEEDS: dict[str, str | None] = {"research": None, "script": "title", "voiceover": "script_approval", "scenes": "voiceover", "images": "scenes",
              "thumbnail": "script_approval", "seo": "voiceover", "assembly": "images", "publish": "final_review"}
 # Jobs whose result nothing later is built on: making them again resets nothing.
-SIDE_JOBS = {"thumbnail", "seo"}
+SIDE_JOBS = {"research", "thumbnail", "seo"}  # research only suggests: the creator still picks the title
 SCENE_WORDS = 25  # about 10 seconds of narration per scene
 VOICE_SPEEDS = (0.6, 1.6)
 
@@ -172,11 +172,13 @@ def start_job(stages: dict[str, dict[str, Any]], kind: str, partial: bool = Fals
     if kind not in JOB_STAGE:
         raise ProjectError(f"unknown job {kind!r}", status=400)
     stage, needs = JOB_STAGE[kind], JOB_NEEDS[kind]
-    if stages[needs]["state"] not in FINISHED:
+    if needs and stages[needs]["state"] not in FINISHED:
         what = needs.replace("_approval", "").replace("_", " ")
         raise ProjectError(f"{'approve' if needs in APPROVAL_STAGES else 'finish'} the {what} first", "earlier_stage_open")
     if stages[stage]["state"] == "running":
         raise ProjectError(f"the {kind} is already being made", "job_running")
+    if kind == "research" and stages["title"]["state"] == "approved":
+        raise ProjectError("the title is approved; reopen it to research again", "invalid_state")
     if kind == "script" and stages["script_approval"]["state"] == "approved":
         raise ProjectError("the script is approved; reopen it to write a new one", "invalid_state")
     # The thumbnail doesn't depend on the scenes or images, and remaking some images keeps the rest: nothing else changes.

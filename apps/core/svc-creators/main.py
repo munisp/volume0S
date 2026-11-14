@@ -16,6 +16,7 @@ import re
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
+import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -23,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import model
 from model import ProjectError
 from providers import AudioStore, ProviderError, VoiceService
+import research as rs
 import youtube as yt
 from store import PostgresCreatorStore
 
@@ -106,7 +108,7 @@ class ScriptInput(InputModel):
 
 
 class JobInput(InputModel):
-    kind: Literal["script", "voiceover", "scenes", "images", "thumbnail", "seo", "assembly", "publish"]
+    kind: Literal["research", "script", "voiceover", "scenes", "images", "thumbnail", "seo", "assembly", "publish"]
     privacy: Literal["private", "unlisted", "public"] = "private"   # publish
     publish_at: str = Field(default="", max_length=40)              # publish: ISO time to go public (scheduled)
     made_for_kids: bool = False
@@ -299,6 +301,41 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube
             return who
         return view(await load(who[0], project_id))
 
+    @app.get("/v1/creators/projects/{project_id}/launch")
+    async def launch(project_id: str, request: Request):
+        """The launch plan: the title's score, a checklist anyone can verify, good upload times for the audience,
+        and, once YouTube is connected, what this channel's own recent videos did (real numbers, never invented)."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        tenant = who[0]
+        project = await load(tenant, project_id)
+        channel = await app.state.store.channel(tenant, project["channel_id"]) or {}
+        found = project["record"].get("research") or {}
+        keywords = (found.get("keywords") or {}).get("primary", []) + (found.get("keywords") or {}).get("secondary", []) \
+            or (project["record"].get("seo") or {}).get("primary_keywords", [])
+        title, rated = project.get("title", ""), None
+        for item in found.get("titles", []) + ([found["current_title"]] if found.get("current_title") else []):
+            if item["title"].lower() == title.lower() and item.get("rated_by_model"):
+                rated = item
+        ratings = {p["name"].split(" ")[0].lower(): int(p["note"].split("/")[0]) for p in (rated or {}).get("parts", []) if "rating" in p["name"]}
+        score = rs.score_title(title, keywords, ratings.get("clarity"), ratings.get("curiosity")) if title else None
+        zone, label = rs.audience_zone(project.get("audience", ""), channel.get("audience", ""), channel.get("niche", ""))
+        link = await app.state.store.youtube(tenant, project["channel_id"])
+        result: dict[str, Any] = {"title_score": score, "checklist": rs.readiness(project, link is not None),
+                                  "times": rs.upload_times(zone, label), "baseline": None, "baseline_note": ""}
+        if app.state.youtube is None or link is None:
+            result["baseline_note"] = "Connect the channel's YouTube to compare with what your own recent videos did."
+        else:
+            try:
+                token = await app.state.youtube.access_token(yt.unseal(link["refresh_token_sealed"]))
+                result["baseline"] = rs.baseline(await app.state.youtube.recent_videos(token, link["youtube_channel_id"]))
+                if result["baseline"] is None:
+                    result["baseline_note"] = "No uploads on the channel yet: the first videos set the baseline."
+            except (yt.YouTubeError, httpx.HTTPError) as exc:
+                result["baseline_note"] = f"YouTube's numbers couldn't be read just now ({str(exc)[:160]})."
+        return result
+
     @app.patch("/v1/creators/projects/{project_id}")
     async def update_project(project_id: str, body: ProjectUpdate, request: Request):
         who = caller(request)
@@ -326,13 +363,14 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube
         tenant, actor = who
         project = await load(tenant, project_id)
         stages = project["stages"]
-        if stages["research"]["state"] == "pending":
-            model.set_state(stages, "research", "skipped", "title chosen without research")
-        elif stages["research"]["state"] not in model.FINISHED:
+        if stages["research"]["state"] == "running":
             raise ProjectError("research is still running", "earlier_stage_open")
+        if stages["research"]["state"] in ("pending", "failed"):
+            model.set_state(stages, "research", "skipped", "title chosen without research")
         options = [o.strip() for o in body.options if o.strip()][:20]
         chosen = body.chosen.strip()
-        project["record"]["title"] = {"chosen": chosen, "options": options or [chosen], "source": "creator"}
+        picked = any(t["title"].lower() == chosen.lower() for t in (project["record"].get("research") or {}).get("titles", []))
+        project["record"]["title"] = {"chosen": chosen, "options": options or [chosen], "source": "research" if picked else "creator"}
         project["title"] = chosen
         reset = model.reset_after(stages, "title")
         model.set_state(stages, "title", "needs_approval")

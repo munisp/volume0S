@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
-import { Check, Circle, CircleDot, Clapperboard, Download, ExternalLink, Link2, Mic, Play, Plus, RefreshCw, RotateCcw, Sparkles, Unlink, Upload, X } from 'lucide-react'
+import { Check, Circle, CircleDot, Clapperboard, Search, Download, ExternalLink, Link2, Mic, Play, Plus, RefreshCw, RotateCcw, Sparkles, Unlink, Upload, X } from 'lucide-react'
 import { useSession, errorText } from '../state/session-context'
 import { allowed } from '../lib/access'
-import type { CreatorChannel, CreatorEvent, CreatorJob, CreatorProject, CreatorScene, CreatorStage, CreatorVoice, CreatorYouTube } from '../lib/types'
+import type { CreatorChannel, CreatorEvent, CreatorJob, CreatorLaunch, CreatorProject, CreatorResearch, CreatorScene, CreatorStage, CreatorVoice, CreatorYouTube } from '../lib/types'
 import { Confirm, Empty, Field, Modal, Note, PageHead, RoleNote, Submit, When } from '../components/ui'
 
 const DURATIONS = [5, 10, 15, 20, 30, 45]
@@ -13,7 +13,7 @@ const STATE_LABEL: Record<CreatorStage['state'], string> = {
 }
 const EVENT_LABEL: Record<string, string> = {
   created: 'Project created', title_set: 'Title chosen', script_saved: 'Script saved', approved: 'Approved',
-  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made', scenes_saved: 'Scenes planned', images_saved: 'Images made', thumbnails_saved: 'Thumbnails made', thumbnail_chosen: 'Thumbnail chosen', scene_edited: 'Scene edited', seo_saved: 'SEO package written', video_saved: 'Video made', published: 'Uploaded to YouTube',
+  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made', scenes_saved: 'Scenes planned', images_saved: 'Images made', thumbnails_saved: 'Thumbnails made', thumbnail_chosen: 'Thumbnail chosen', scene_edited: 'Scene edited', seo_saved: 'SEO package written', video_saved: 'Video made', research_saved: 'Research done', published: 'Uploaded to YouTube',
 }
 
 /** Offer 35 Creators Home: YouTube channels and their video projects, each moving through 12 production stages. */
@@ -185,7 +185,7 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
   const [reason, setReason] = useState('')
   const [events, setEvents] = useState<CreatorEvent[]>([])
   const [jobs, setJobs] = useState<CreatorJob[]>([])
-  const [confirm, setConfirm] = useState<'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly' | null>(null)
+  const [confirm, setConfirm] = useState<'research' | 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly' | null>(null)
   const [burn, setBurn] = useState(false)
   const [voice, setVoice] = useState(project.record.voiceover?.voice ?? '')
   const [speed, setSpeed] = useState(1)
@@ -221,10 +221,10 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
   const approve = (key: string, message: string) => act(() => api.creatorStage(project.id, key, 'approve', '', project.version), message)
   const reopen = (key: string) => act(async () => { const r = await api.creatorStage(project.id, key, 'reopen', reason.trim(), project.version); setReason(''); return r },
     'Reopened. Everything built on it goes back to not started.')
-  const JOB_MESSAGE = { script: 'Writing the script. It appears here when it is ready.', voiceover: 'Making the voiceover, chapter by chapter.',
+  const JOB_MESSAGE = { research: 'Researching angles, questions and titles. About a minute.', script: 'Writing the script. It appears here when it is ready.', voiceover: 'Making the voiceover, chapter by chapter.',
     scenes: 'Planning the scenes from the narration.', images: 'Making the images, scene by scene.', thumbnail: 'Making three thumbnail options.',
     seo: 'Writing the SEO package.', assembly: 'Making the video on ghana.' }
-  const startJob = (kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly', scenes: number[] = []) => act(async () => {
+  const startJob = (kind: 'research' | 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly', scenes: number[] = []) => act(async () => {
     const input = kind === 'voiceover' ? { kind, voice, speed, version: project.version } : kind === 'images' ? { kind, scenes, version: project.version }
       : kind === 'assembly' ? { kind, burn_subtitles: burn, version: project.version } : { kind, version: project.version }
     const r = await api.startCreatorJob(project.id, input)
@@ -244,7 +244,15 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
     <StageList stages={project.stages} />
 
     <div className="stack" aria-label="Title">
-      <strong>1–2 · Title</strong>
+      <strong>1–2 · Research and title</strong>
+      {stage('research').state === 'running' && <Note>Researching… {latest('research')?.progress || 'queued'}. This page updates by itself.</Note>}
+      {stage('research').state === 'failed' && <Note tone="failed">The research didn't finish: {stage('research').note}. Try again, or type a title yourself.</Note>}
+      {canEdit && !titleApproved && stage('research').state !== 'running' && <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="button button-secondary" disabled={busy} onClick={() => setConfirm('research')}><Search size={14} /> {project.record.research ? 'Research again' : 'Research this topic'}</button>
+        <span className="small muted">Angles, viewer questions, points to cover, search keywords and scored title ideas. The script follows it.</span>
+      </div>}
+      {project.record.research && <ResearchPanel research={project.record.research} current={project.title} canPick={canEdit && !titleApproved && !busy}
+        onPick={t => { setTitle(t); void act(() => api.setCreatorTitle(project.id, t, project.record.research!.titles.map(x => x.title), project.version), 'Title picked. Approve it to write the script.') }} />}
       {canEdit && !titleApproved && <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label className="field" style={{ flex: 1, minWidth: 260 }}><span>Video title</span>
           <input value={title} maxLength={100} onChange={e => setTitle(e.target.value)} placeholder="7 Signs God Is Preparing Your Spouse Right Now" /></label>
@@ -329,6 +337,7 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
           onClick={() => void approve('final_review', 'Approved. You can upload it to YouTube now.')}>Approve the final video</button>
         {(!project.record.thumbnail?.chosen || !project.record.seo) && <span className="small muted">Choose a thumbnail and write the SEO package first.</span>}
       </div>}
+      {stage('final_review').state === 'needs_approval' && <LaunchPlan project={project} />}
     </div>}
 
     {stage('final_review').state === 'approved' && <PublishSection project={project} canEdit={canEdit} busy={busy} progress={latest('publish')?.progress || ''}
@@ -342,6 +351,10 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
       </ul> : <p className="small muted">Nothing yet.</p>}
     </div>
 
+    {confirm === 'research' && <Confirm title="Research this topic?" confirmLabel="Research it" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('research')}>
+      <p>The open-source model suggests angles, the questions viewers ask, points to cover, search keywords and eight titles, each scored. About a minute.
+        It suggests only: you still pick or type the title. It isn't YouTube search data.</p>
+    </Confirm>}
     {confirm === 'script' && <Confirm title="Write the script with AI?" confirmLabel="Write the script" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('script')}>
       <p>About {target.toLocaleString()} words in {model.chapters(project.duration_minutes)} chapters, following {channel?.name ?? 'the channel'}'s instructions. It takes about {scriptMinutes}–{scriptMinutes * 2} minutes on the open-source model; nothing is approved until you approve it.
         {project.record.script ? ' The current script is replaced.' : ''}</p>
@@ -448,6 +461,81 @@ function ScenesSection({ project, canEdit, busy, running, onPlan, onImages, onRe
   </div>
 }
 
+function ScoreBar({ score }: { score: number }) {
+  const tone = score >= 75 ? 'var(--done)' : score >= 55 ? 'var(--attention)' : 'var(--failed)'
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} aria-label={`score ${score} of 100`}>
+    <span style={{ width: 64, height: 6, borderRadius: 3, background: 'var(--line)', overflow: 'hidden' }}>
+      <span style={{ display: 'block', width: `${score}%`, height: '100%', background: tone }} /></span>
+    <strong className="small">{score}</strong></span>
+}
+
+function ScoreParts({ parts }: { parts: { name: string; points: number; max: number; note: string }[] }) {
+  return <ul className="small muted" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+    {parts.map(p => <li key={p.name}>{p.name}: {p.points}/{p.max} · {p.note}</li>)}</ul>
+}
+
+function ResearchPanel({ research, current, canPick, onPick }: { research: CreatorResearch; current: string; canPick: boolean; onPick: (title: string) => void }) {
+  const [open, setOpen] = useState<string | null>(null)
+  return <div className="stack" aria-label="Research" style={{ gap: 10 }}>
+    <p className="small muted">{research.note} Researched by {research.model} <When value={research.made_at} />.</p>
+    <div className="form-grid">
+      <div><span className="eyebrow">Angles</span><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        {research.angles.map(a => <li key={a.angle}><strong>{a.angle}</strong> · {a.why}</li>)}</ul></div>
+      <div><span className="eyebrow">What viewers ask</span><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        {research.audience_questions.map(q => <li key={q}>{q}</li>)}</ul></div>
+      <div><span className="eyebrow">Must cover</span><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        {research.must_cover.map(q => <li key={q}>{q}</li>)}</ul></div>
+      <div><span className="eyebrow">Avoid</span><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        {research.avoid.map(q => <li key={q}>{q}</li>)}</ul>
+        <span className="eyebrow">Search keywords</span><p className="small" style={{ margin: 0 }}>{[...research.keywords.primary, ...research.keywords.secondary].join(' · ')}</p></div>
+    </div>
+    <span className="eyebrow">Title ideas, best first</span>
+    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 }}>
+      {research.titles.map(t => <li key={t.title} className="row" style={{ gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <ScoreBar score={t.score} />
+        <span style={{ flex: 1, minWidth: 220 }}>{t.title}{t.title.toLowerCase() === current.toLowerCase() && <span className="small muted"> · current</span>}
+          <button className="button button-quiet small" style={{ marginLeft: 8 }} onClick={() => setOpen(open === t.title ? null : t.title)}>{open === t.title ? 'Hide why' : 'Why this score'}</button>
+          {open === t.title && <>{t.why && <p className="small muted" style={{ margin: '2px 0 0' }}>{t.why}</p>}<ScoreParts parts={t.parts} /></>}</span>
+        {canPick && t.title.toLowerCase() !== current.toLowerCase() && <button className="button button-secondary" onClick={() => onPick(t.title)}>Use this title</button>}
+      </li>)}
+    </ul>
+    {research.current_title && <p className="small">Your own title “{research.current_title.title}” scores <strong>{research.current_title.score}</strong>{research.current_title.why ? ` · ${research.current_title.why}` : ''}</p>}
+  </div>
+}
+
+function LaunchPlan({ project, onPickTime }: { project: CreatorProject; onPickTime?: (at: string) => void }) {
+  const { api } = useSession()
+  const [plan, setPlan] = useState<CreatorLaunch | null>(null)
+  const [failed, setFailed] = useState('')
+  useEffect(() => {
+    let live = true
+    api.creatorLaunch(project.id).then(p => { if (live) { setPlan(p); setFailed('') } }, e => { if (live) setFailed(errorText(e)) })
+    return () => { live = false }
+  }, [api, project.id, project.version])
+  if (failed) return <p className="small muted">The launch plan didn't load: {failed}</p>
+  if (!plan) return <p className="small muted">Loading the launch plan…</p>
+  const ready = plan.checklist.filter(c => c.ok).length
+  return <div className="stack" aria-label="Launch plan" style={{ gap: 8 }}>
+    <span className="eyebrow">Launch plan · {ready} of {plan.checklist.length} ready</span>
+    {plan.title_score && <div><span className="small">Title score </span><ScoreBar score={plan.title_score.score} />
+      {!plan.title_score.rated_by_model && <span className="small muted"> · checks only; research the topic for the model's clarity and curiosity ratings</span>}
+      <ScoreParts parts={plan.title_score.parts} /></div>}
+    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 2 }}>
+      {plan.checklist.map(c => <li key={c.key} className="small">{c.ok ? <Check size={13} /> : <X size={13} />} {c.label} <span className="muted">· {c.note}</span></li>)}
+    </ul>
+    <div><span className="small">Good times to publish for {plan.times.audience}:</span>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+        {plan.times.slots.map(s => onPickTime
+          ? <button key={s.at} className="button button-secondary" title={s.why} onClick={() => onPickTime(s.at)}>{s.local}</button>
+          : <span key={s.at} className="small" title={s.why} style={{ border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px' }}>{s.local}</span>)}
+      </div><p className="small muted" style={{ margin: '4px 0 0' }}>{plan.times.note}{onPickTime ? ' Click one to schedule it.' : ''}</p></div>
+    {plan.baseline ? <p className="small">Your last {plan.baseline.videos} videos: typically {plan.baseline.typical_range[0].toLocaleString()}–{plan.baseline.typical_range[1].toLocaleString()} views
+      (median {plan.baseline.median_views.toLocaleString()}, about {plan.baseline.median_views_per_day.toLocaleString()} a day); best “{plan.baseline.best.title}” with {plan.baseline.best.views.toLocaleString()}.
+      <span className="muted"> {plan.baseline.note}</span></p>
+      : <p className="small muted">{plan.baseline_note}</p>}
+  </div>
+}
+
 function PublishSection({ project, canEdit, busy, progress, onPublish }: {
   project: CreatorProject; canEdit: boolean; busy: boolean; progress: string
   onPublish: (input: { privacy: 'private' | 'unlisted' | 'public'; publish_at: string; made_for_kids: boolean }) => Promise<void>
@@ -483,9 +571,14 @@ function PublishSection({ project, canEdit, busy, progress, onPublish }: {
   const scheduled = when ? new Date(when) : null
   const badTime = Boolean(scheduled && (Number.isNaN(scheduled.getTime()) || tooSoon))
   const info = link?.youtube
+  const pickTime = (at: string) => {
+    const d = new Date(at), pad = (n: number) => String(n).padStart(2, '0')
+    setWhen(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`); setTooSoon(false)
+  }
 
   return <div className="stack" aria-label="Publishing">
     <strong>12 · YouTube publishing</strong>
+    {!done && <LaunchPlan project={project} onPickTime={info && canEdit && stage.state !== 'running' ? pickTime : undefined} />}
     {done && <Note tone="done">Uploaded to {done.channel} as {done.privacy}{done.publish_at ? `, goes public ${new Date(done.publish_at).toLocaleString()}` : ''}.{' '}
       <a href={done.url} target="_blank" rel="noreferrer">{done.url} <ExternalLink size={12} /></a> · <a href={done.studio_url} target="_blank" rel="noreferrer">Open in YouTube Studio</a>
       {done.notes.length > 0 && <> · Not everything went through: {done.notes.join('; ')}</>}</Note>}

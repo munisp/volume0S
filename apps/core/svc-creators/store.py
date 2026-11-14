@@ -133,6 +133,10 @@ ALTER TABLE creator_youtube FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON creator_youtube;
 CREATE POLICY tenant_isolation ON creator_youtube USING (tenant_id = current_setting('volumeos.tenant_id', true))
     WITH CHECK (tenant_id = current_setting('volumeos.tenant_id', true));
+"""), ("006_research", """
+ALTER TABLE creator_jobs DROP CONSTRAINT IF EXISTS creator_jobs_kind_check;
+ALTER TABLE creator_jobs ADD CONSTRAINT creator_jobs_kind_check
+    CHECK (kind IN ('research','script','voiceover','scenes','images','thumbnail','seo','assembly','publish'));
 """)]
 
 CHANNEL_FIELDS = ("name", "youtube_handle", "niche", "audience", "language", "writing_instructions", "visual_preset",
