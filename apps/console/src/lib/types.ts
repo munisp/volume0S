@@ -383,10 +383,12 @@ export type CreatorYouTube = { configured: boolean; connected: boolean
 
 export type CreatorEvent = { kind: string; stage: string; actor: string; detail: Record<string, unknown>; created_at: string }
 
-export type CreatorJob = { id: string; kind: 'research' | 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly' | 'publish'; status: 'queued' | 'running' | 'done' | 'failed'; progress: string; error: string;
+export type CreatorJob = { id: string; kind: 'research' | 'script' | 'voiceover' | 'scenes' | 'images' | 'motion' | 'thumbnail' | 'seo' | 'assembly' | 'publish'; status: 'queued' | 'running' | 'done' | 'failed'; progress: string; error: string;
   params: Record<string, unknown>; attempts: number; created_at: string; started_at: string | null; finished_at: string | null }
 
 export type CreatorVoice = { id: string; name: string; gender: 'male' | 'female'; accent: string }
 
 export type CreatorScene = { number: number; chapter: number; narration: string; visual: string; prompt: string; camera: string; lighting: string;
-  seconds: number; seed: number; image: { key: string; prompt: string; model: string; made_at: string; stale?: boolean } | null }
+  seconds: number; seed: number; image: { key: string; prompt: string; model: string; made_at: string; stale?: boolean } | null
+  still?: boolean
+  motion?: { key: string; image_key: string; image_made_at: string; prompt: string; model: string; quality?: 'standard' | 'hd'; seconds: number; bytes: number; took: number; made_at: string; stale?: boolean } | null }

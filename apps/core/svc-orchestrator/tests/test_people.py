@@ -314,3 +314,10 @@ def test_creators_launch_plan_is_readable_by_any_role():
         assert client.get(f"/v1/creators/projects/{PROJECT}/launch", headers=auth()).status_code == 200
         assert client.get("/v1/creators/projects/nope/launch", headers=auth()).status_code == 400
     assert creators.calls[0][:2] == ("GET", f"/projects/{PROJECT}/launch")
+
+
+def test_creators_motion_clip_names_are_checked():
+    client, creators = creators_client(Claims("demo-tenant", "reader-sub", frozenset({"reader"})))
+    with client:
+        assert client.get(f"/v1/creators/projects/{PROJECT}/motion/../../x.mp4", headers=auth()).status_code in (400, 404)
+        assert client.get(f"/v1/creators/projects/{PROJECT}/motion/scene-1.mp4", headers=auth()).status_code == 400

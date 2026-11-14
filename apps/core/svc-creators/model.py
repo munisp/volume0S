@@ -157,11 +157,13 @@ def script_record(text: str, duration_minutes: int, source: str) -> dict[str, An
 # (an approved title before the script; an approved script before the voice), and starting one sends everything
 # built on its stage back to not started.
 JOB_STAGE = {"research": "research", "script": "script", "voiceover": "voiceover", "scenes": "scenes", "images": "images", "thumbnail": "thumbnail",
-             "seo": "seo", "assembly": "assembly", "publish": "publishing"}
+             "seo": "seo", "assembly": "assembly", "publish": "publishing",
+             "motion": "images"}  # motion clips are made from the scene images, as part of the visuals
 # What has to be finished first: an approved title before the script, the approved script before the voice and the
 # thumbnail, the voiceover (its timings) before the scenes, the scenes before their images.
 JOB_NEEDS: dict[str, str | None] = {"research": None, "script": "title", "voiceover": "script_approval", "scenes": "voiceover", "images": "scenes",
-             "thumbnail": "script_approval", "seo": "voiceover", "assembly": "images", "publish": "final_review"}
+             "thumbnail": "script_approval", "seo": "voiceover", "assembly": "images", "publish": "final_review",
+             "motion": "images"}
 # Jobs whose result nothing later is built on: making them again resets nothing.
 SIDE_JOBS = {"research", "thumbnail", "seo"}  # research only suggests: the creator still picks the title
 SCENE_WORDS = 25  # about 10 seconds of narration per scene
@@ -189,6 +191,11 @@ def start_job(stages: dict[str, dict[str, Any]], kind: str, partial: bool = Fals
 
 def finish_job(stages: dict[str, dict[str, Any]], kind: str, ok: bool, note: str) -> None:
     stage = JOB_STAGE[kind]
+    if not ok and kind == "motion":
+        # The images are all still there: the video can be made (with stills where clips are missing) or motion run again,
+        # which carries on from the scenes already animated.
+        set_state(stages, stage, "done", f"motion stopped: {note}. Animate again to carry on")
+        return
     if not ok:
         set_state(stages, stage, "failed", note)
         return
@@ -197,6 +204,13 @@ def finish_job(stages: dict[str, dict[str, Any]], kind: str, ok: bool, note: str
         set_state(stages, "script_approval", "needs_approval")
     if kind == "assembly":
         set_state(stages, "final_review", "needs_approval")
+
+
+def motion_ready(scene: dict[str, Any]) -> bool:
+    """A scene plays as motion when it has a clip made from its current image and isn't set to stay still."""
+    clip, image = scene.get("motion") or {}, scene.get("image") or {}
+    return (bool(clip.get("key")) and not scene.get("still") and not clip.get("stale")
+            and clip.get("image_key") == image.get("key") and clip.get("image_made_at") == image.get("made_at"))
 
 
 def script_outline_size(duration_minutes: int) -> int:

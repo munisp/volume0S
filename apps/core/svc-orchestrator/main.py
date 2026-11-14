@@ -593,6 +593,13 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
         body, headers = await creators_service().stream(f"/projects/{project_id}/video/{name}", claims.tenant_id, claims.actor)
         return StreamingResponse(body, media_type=headers.pop("content-type", "application/octet-stream"), headers=headers)
 
+    @app.get("/v1/creators/projects/{project_id}/motion/{name}")
+    async def creator_motion(project_id: CreatorId, name: Annotated[str, Path(pattern=r"^scene-\d{3}\.mp4$")],
+                             claims: Claims = Depends(need("reader"))):
+        """One scene's motion clip, streamed."""
+        body, headers = await creators_service().stream(f"/projects/{project_id}/motion/{name}", claims.tenant_id, claims.actor)
+        return StreamingResponse(body, media_type=headers.pop("content-type", "video/mp4"), headers=headers)
+
     @app.get("/v1/creators/projects/{project_id}/events")
     async def creator_events(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
         return await creators_service().call("GET", f"/projects/{project_id}/events", claims.tenant_id, claims.actor)

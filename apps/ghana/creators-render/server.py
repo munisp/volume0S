@@ -1,7 +1,8 @@
 """creators-render: assembles a Creators Home video on ghana's CPU cores with FFmpeg.
 
 Input (multipart): spec.json (scenes with image file name and seconds, chapter audio file names in order, options)
-plus the files. Every scene becomes a 1080p30 clip with a slow zoom or pan for exactly its seconds (in parallel);
+plus the files. Every scene becomes a 1080p30 clip for exactly its seconds (in parallel): its AI motion shots (from
+creators-motion) joined and fitted to the narration, or, for a still scene, a slow zoom or pan over its image;
 the clips are joined and laid over the chapters' narration, so each picture is on screen while its words are said.
 Subtitles (SRT) come from the scenes' narration and timings and can be burned in. Output: H.264/AAC MP4 (faststart).
 Bearer token; published on Tailscale only.
@@ -84,6 +85,31 @@ def clip(image: Path, seconds: float, index: int, out: Path) -> None:
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-r", str(FPS), str(out)])
 
 
+def duration(path: Path) -> float:
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True)
+    return float(out.stdout.strip() or 0)
+
+
+def motion_clip(shots: list[Path], seconds: float, out: Path) -> None:
+    """The scene's motion shots back to back, scaled to 1080p30 and fitted to exactly `seconds`: a little slower if
+    they run short (at most 1.25x, which reads as natural), then the last frame held for any remainder; trimmed if long."""
+    joined = out.with_suffix(".joined.mp4")
+    if len(shots) == 1:
+        shutil.copy(shots[0], joined)
+    else:
+        listing = out.with_suffix(".txt")
+        listing.write_text("".join(f"file '{p.name}'\n" for p in shots))
+        run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(joined)])
+    have = duration(joined) or seconds
+    slow = min(max(seconds / have, 1.0), 1.25)
+    hold = max(seconds - have * slow, 0)
+    vf = (f"setpts={slow:.4f}*PTS,scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},"
+          f"tpad=stop_mode=clone:stop_duration={hold + 0.1:.3f},format=yuv420p")
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(joined), "-an", "-vf", vf, "-frames:v", str(max(1, round(seconds * FPS))),
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-r", str(FPS), str(out)])
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "ffmpeg": shutil.which("ffmpeg") is not None, "cores": os.cpu_count()}
@@ -103,7 +129,8 @@ async def render(request: Request, authorization: str | None = Header(default=No
                 raise HTTPException(400, f"bad file name {key!r}")
             (work / key).write_bytes(await value.read())
         scenes, chapters = spec["scenes"], spec["chapters"]
-        if not scenes or not chapters or any(not (work / s["image"]).exists() for s in scenes) or any(not (work / c).exists() for c in chapters):
+        if not scenes or not chapters or any(not (work / s["image"]).exists() for s in scenes) or any(not (work / c).exists() for c in chapters) \
+                or any(not (work / m).exists() or not SAFE.fullmatch(m) for s in scenes for m in s.get("motion") or []):
             raise HTTPException(400, "missing scenes, chapter audio or files")
         started = time.time()
         async with lock:
@@ -121,8 +148,13 @@ async def render(request: Request, authorization: str | None = Header(default=No
 def build(work: Path, spec: dict) -> None:
     scenes, chapters = spec["scenes"], spec["chapters"]
     with ThreadPoolExecutor(max_workers=max(2, (os.cpu_count() or 4) // 2)) as pool:
-        list(pool.map(lambda item: clip(work / item[1]["image"], float(item[1]["seconds"]), item[0], work / f"clip-{item[0]:04d}.mp4"),
-                      enumerate(scenes)))
+        def scene(item: tuple[int, dict]) -> None:
+            i, s = item
+            if s.get("motion"):
+                motion_clip([work / m for m in s["motion"]], float(s["seconds"]), work / f"clip-{i:04d}.mp4")
+            else:
+                clip(work / s["image"], float(s["seconds"]), i, work / f"clip-{i:04d}.mp4")
+        list(pool.map(scene, enumerate(scenes)))
     (work / "clips.txt").write_text("".join(f"file 'clip-{i:04d}.mp4'\n" for i in range(len(scenes))))
     (work / "audio.txt").write_text("".join(f"file '{c}'\n" for c in chapters))
     (work / "captions.srt").write_text(subtitles(scenes))

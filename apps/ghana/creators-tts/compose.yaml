@@ -30,3 +30,15 @@ services:
     env_file: /home/newwave-dgx/creators-home/secrets.env
     ports: ["100.88.112.5:8895:8895"]
     volumes: ["/home/newwave-dgx/creators-home/render-work:/work"]
+  creators-motion:
+    build: ./creators-motion   # on ghana: ~/creators-home/creators-motion
+    image: creators-motion:1
+    restart: unless-stopped
+    env_file: /home/newwave-dgx/creators-home/secrets.env
+    environment: [HF_HUB_OFFLINE=1]
+    ports: ["100.88.112.5:8892:8892"]
+    volumes: ["/home/newwave-dgx/creators-home/models:/models"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]

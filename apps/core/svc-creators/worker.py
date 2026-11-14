@@ -14,8 +14,8 @@ import os
 from typing import Any
 
 import model
-from providers import (_json_chat, AudioStore, ImageService, OllamaWriter, ProviderError, RenderService, VoiceService, caption_thumbnail,
-                       captions, chapter_marks, characters, chunks_for_speech, image_prompt, join_wavs, scene_visuals, seo_package,
+from providers import (_json_chat, AudioStore, ImageService, MotionService, OllamaWriter, ProviderError, RenderService, VoiceService, caption_thumbnail,
+                       captions, chapter_marks, characters, chunks_for_speech, image_prompt, join_wavs, motion_prompt, scene_visuals, seo_package,
                        thumbnail_concepts, to_jpeg)
 import research as rs
 import youtube as yt
@@ -69,9 +69,11 @@ def scene_spans(planned: list[float], target: float, floor: float = 0.2) -> list
 
 
 class Worker:
-    def __init__(self, store: Any, writer: Any, voices: Any, audio: Any, images: Any = None, renderer: Any = None, youtube: Any = None):
+    def __init__(self, store: Any, writer: Any, voices: Any, audio: Any, images: Any = None, renderer: Any = None, youtube: Any = None,
+                 motion: Any = None):
         self.store, self.writer, self.voices, self.audio, self.images, self.renderer = store, writer, voices, audio, images, renderer
-        self.youtube = youtube
+        self.youtube, self.motion = youtube, motion
+        self.retry_wait = 30.0  # seconds before a scene's clip is tried again
         self.current: dict[str, Any] | None = None  # the job in hand (handed back if the worker is stopped)
         self.last_progress = ""
 
@@ -242,6 +244,77 @@ class Worker:
         await self.save(tenant, pid, apply, {"kind": "images_saved", "stage": "images", "detail": {"images": len(made)}})
         return f"{len(made)} images"
 
+    async def run_motion(self, job: dict[str, Any]) -> str:
+        """A moving clip per scene, starting on the scene's image (Wan 2.2 on ghana). Scenes set to stay still are
+        skipped. Clips already made from the current image are kept unless the scene was asked for by number, so a
+        job that was interrupted carries on where it stopped. Saved every few scenes."""
+        if self.motion is None:
+            raise ProviderError("the motion service isn't set up")
+        tenant, pid = job["tenant_id"], job["project_id"]
+        project = await self.store.project(tenant, pid)
+        cast = project["record"].get("characters") or []
+        asked = set(job["params"].get("scenes") or [])
+        quality = job["params"].get("quality", "standard")
+        todo = [s for s in project["record"].get("scenes") or [] if (not asked or s["number"] in asked) and not s.get("still")
+                and (s.get("image") or {}).get("key") and (asked or not model.motion_ready(s))]
+        pending: dict[int, dict[str, Any]] = {}
+        made, seconds_made, spent = 0, 0.0, 0.0
+
+        def keep(p: dict[str, Any]) -> None:
+            if p["stages"]["images"]["state"] != "running":
+                raise ProviderError("the visuals were changed meanwhile; motion stopped")
+            for s in p["record"].get("scenes") or []:
+                if s["number"] in pending and (s.get("image") or {}).get("made_at") == pending[s["number"]]["image_made_at"]:
+                    s["motion"] = pending[s["number"]]
+
+        for scene in todo:
+            left = ""
+            if made:
+                per_second = spent / max(seconds_made, 1)
+                left = f", about {max(1, round(per_second * sum(float(s['seconds']) for s in todo[made:]) / 60))} min left"
+            await self.progress(job, f"animating scene {scene['number']} ({made + 1} of {len(todo)}){left}")
+            image = await self.audio.get(scene["image"]["key"])
+            prompt = motion_prompt(scene, cast)
+            seconds = float(scene["seconds"])
+            for attempt in range(3):
+                try:
+                    data, engine, took = await self.motion.animate(to_jpeg(image), prompt, seconds, scene["seed"], quality)
+                    break
+                except ProviderError:
+                    if attempt == 2:
+                        if pending:
+                            await self.store_motion(tenant, pid, keep)
+                        raise
+                    await self.progress(job, f"scene {scene['number']}: the motion service didn't answer, trying again")
+                    await asyncio.sleep(self.retry_wait)
+            key = self.audio.key(tenant, pid, f"motion/scene-{scene['number']:03d}-{scene['seed']}-{hashlib.sha256(prompt.encode()).hexdigest()[:8]}.mp4")
+            await self.audio.put(key, data, "video/mp4")
+            pending[scene["number"]] = {"key": key, "image_key": scene["image"]["key"], "image_made_at": scene["image"].get("made_at"), "prompt": prompt, "model": engine, "quality": quality,
+                                        "seconds": seconds, "bytes": len(data), "took": took, "made_at": model.now()}
+            made, seconds_made, spent = made + 1, seconds_made + seconds, spent + (took or 1)
+            if len(pending) >= 4:
+                await self.store_motion(tenant, pid, keep); pending.clear()
+
+        def finish(p: dict[str, Any]) -> None:
+            keep(p)
+            scenes = p["record"].get("scenes") or []
+            moving = sum(1 for s in scenes if model.motion_ready(s))
+            model.finish_job(p["stages"], "motion", True, f"{moving} of {len(scenes)} scenes in motion"
+                             + (f", {sum(1 for s in scenes if s.get('still'))} kept still" if any(s.get("still") for s in scenes) else ""))
+        await self.save(tenant, pid, finish, {"kind": "motion_saved", "stage": "images", "detail": {"clips": made}})
+        return f"{made} clips"
+
+    async def store_motion(self, tenant: str, pid: str, change) -> None:
+        """Saves clips made so far without a history entry per scene (one 'motion made' entry at the end)."""
+        for _ in range(5):
+            project = await self.store.project(tenant, pid)
+            change(project)
+            try:
+                await self.store.save_project(tenant, project, project["version"], {"kind": "motion_progress", "stage": "images", "actor": WORKER})
+                return
+            except LookupError:
+                await asyncio.sleep(0.5)
+
     async def run_thumbnail(self, job: dict[str, Any]) -> str:
         """Three thumbnail concepts: a caption that isn't the title, drawn large on a background made for it."""
         if self.images is None:
@@ -288,7 +361,16 @@ class Worker:
         return f"{len(package['tags'])} tags"
 
     async def run_assembly(self, job: dict[str, Any]) -> str:
-        """The finished video: every scene image on screen for exactly its narration, over the recorded chapters."""
+        """The finished video: every scene (its motion clip, or its image with a slow zoom) on screen for exactly its narration, over the recorded chapters."""
+        import shutil
+        import tempfile
+        workdir = tempfile.mkdtemp(prefix="assembly-", dir="/tmp")
+        try:
+            return await self._assemble(job, workdir)
+        finally:
+            shutil.rmtree(workdir, True)
+
+    async def _assemble(self, job: dict[str, Any], workdir: str) -> str:
         if self.renderer is None:
             raise ProviderError("the render service isn't set up")
         import tempfile
@@ -308,7 +390,13 @@ class Worker:
             for scene, span in zip(items, spans):
                 name = f"scene-{scene['number']:03d}.jpg"
                 files[name] = to_jpeg(await self.audio.get(scene["image"]["key"]))
-                timed.append({"image": name, "seconds": span, "narration": scene["narration"]})
+                entry = {"image": name, "seconds": span, "narration": scene["narration"]}
+                if model.motion_ready(scene):
+                    clip = f"scene-{scene['number']:03d}.mp4"
+                    path = os.path.join(workdir, clip)
+                    await self.audio.download(scene["motion"]["key"], path)
+                    files[clip], entry["motion"] = path, [clip]
+                timed.append(entry)
         chapters = []
         for section in voice.get("sections", []):
             name = f"chapter-{section['index']:02d}.wav"
@@ -405,7 +493,8 @@ class Worker:
         try:
             runner = {"script": self.run_script, "voiceover": self.run_voiceover, "scenes": self.run_scenes,
                       "images": self.run_images, "thumbnail": self.run_thumbnail, "seo": self.run_seo,
-                      "assembly": self.run_assembly, "publish": self.run_publish, "research": self.run_research}[job["kind"]]
+                      "assembly": self.run_assembly, "publish": self.run_publish, "research": self.run_research,
+                  "motion": self.run_motion}[job["kind"]]
             done = await runner(job)
             await self.store.finish_job(job["tenant_id"], job["id"], True)
             log.info("job %s done: %s", job["id"], done)
@@ -449,7 +538,8 @@ async def main() -> None:
     voices, audio = VoiceService.from_env(), AudioStore.from_env()
     if voices is None or audio is None:
         raise SystemExit("TTS_URL, CREATORS_TTS_TOKEN and ASSET_BUCKET are required")
-    worker = Worker(store, OllamaWriter.from_env(), voices, audio, ImageService.from_env(), RenderService.from_env(), yt.YouTube.from_env())
+    worker = Worker(store, OllamaWriter.from_env(), voices, audio, ImageService.from_env(), RenderService.from_env(), yt.YouTube.from_env(),
+                    MotionService.from_env())
     log.info("creators-worker ready (script model %s)", worker.writer.model)
     import signal
     stop = asyncio.Event()

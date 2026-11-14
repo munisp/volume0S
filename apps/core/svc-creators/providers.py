@@ -7,6 +7,7 @@ from creators-tts (Kokoro) on ghana, audio in the VolumeOS asset bucket under th
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import os
@@ -226,6 +227,10 @@ class AudioStore:
                 body.close()
         return obj.get("ContentLength", 0), chunks()
 
+    async def download(self, key: str, path: str) -> None:
+        """To a local file, in parts: motion clips for a render never sit in memory together."""
+        await asyncio.to_thread(self.client.download_file, self.bucket, key, path)
+
     async def get(self, key: str, limit: int = 300_000_000) -> bytes:
         def read() -> bytes:
             obj = self.client.get_object(Bucket=self.bucket, Key=key)
@@ -307,6 +312,45 @@ def image_prompt(scene_prompt: str, cast: list[dict[str, str]], preset: str, asp
         prompt = re.sub(rf"\b{re.escape(person['name'])}\b", f"{person['name']} ({person['look']})", prompt, count=1, flags=re.I)
     style = preset.strip() or "cinematic still, realistic photography, natural light, high detail"
     return f"{prompt}, {style}, {'vertical' if aspect == '9:16' else 'wide'} composition"
+
+
+class MotionService:
+    """creators-motion on ghana: a scene's image + what happens -> a 720p clip starting on that image (Wan 2.2)."""
+
+    def __init__(self, base_url: str, token: str, timeout: float = 3600.0):
+        if not base_url or len(token) < 32:
+            raise RuntimeError("MOTION_URL and CREATORS_TTS_TOKEN are required")
+        self.base_url, self.token, self.timeout = base_url.rstrip("/"), token, timeout
+
+    @classmethod
+    def from_env(cls) -> "MotionService | None":
+        url, token = os.environ.get("MOTION_URL", ""), os.environ.get("CREATORS_TTS_TOKEN", "")
+        return cls(url, token) if url and token else None
+
+    SIZES = {"standard": (832, 480), "hd": (1280, 704)}
+
+    async def animate(self, image: bytes, prompt: str, seconds: float, seed: int, quality: str = "standard") -> tuple[bytes, str, float]:
+        width, height = self.SIZES.get(quality, self.SIZES["standard"])
+        body = {"image": base64.b64encode(image).decode(), "prompt": prompt[:2000], "seconds": round(min(max(seconds, 1.0), 30.0), 2),
+                "seed": seed % 2**31, "width": width, "height": height}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(self.base_url + "/v1/animate", headers={"Authorization": f"Bearer {self.token}"}, json=body)
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(f"the motion service refused the scene ({exc.response.status_code})") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError("the motion service didn't answer") from exc
+        return response.content, response.headers.get("x-motion-model", ""), float(response.headers.get("x-motion-took", "0") or 0)
+
+
+def motion_prompt(scene: dict[str, Any], cast: list[dict[str, str]]) -> str:
+    """What moves in the scene: its action, the camera, natural motion. The image already sets the look and people."""
+    people = "; ".join(f"{c['name']}: {c['look']}" for c in cast if c.get("name") and c["name"].lower() in (scene.get("visual", "") + scene.get("prompt", "")).lower())
+    camera = scene.get("camera") or "slow push-in"
+    return (f"{scene.get('visual') or scene.get('prompt')}. Camera: {camera}, smooth and cinematic. "
+            "Natural, realistic movement: people move, breathe and blink naturally; hands and faces stay steady. "
+            + (f"People: {people}. " if people else "") + "No text on screen.")
 
 
 class ImageService:
@@ -450,9 +494,21 @@ class RenderService:
         url, token = os.environ.get("RENDER_URL", ""), os.environ.get("CREATORS_TTS_TOKEN", "")
         return cls(url, token) if url and token else None
 
-    async def render(self, spec: dict[str, Any], files: dict[str, bytes], out_path: str) -> float:
+    async def render(self, spec: dict[str, Any], files: dict[str, Any], out_path: str) -> float:
+        """`files` values are bytes or local paths (motion clips are sent from disk, part by part)."""
         multipart = [("spec", ("spec.json", json.dumps(spec).encode(), "application/json"))]
-        multipart += [(name, (name, data, "application/octet-stream")) for name, data in files.items()]
+        handles = []
+        for name, data in files.items():
+            if isinstance(data, (str, os.PathLike)):
+                data = open(data, "rb"); handles.append(data)
+            multipart.append((name, (name, data, "application/octet-stream")))
+        try:
+            return await self._send(multipart, out_path)
+        finally:
+            for handle in handles:
+                handle.close()
+
+    async def _send(self, multipart: list[Any], out_path: str) -> float:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 async with client.stream("POST", self.base_url + "/v1/render", files=multipart,

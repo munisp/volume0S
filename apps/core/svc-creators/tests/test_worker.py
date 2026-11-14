@@ -67,6 +67,9 @@ class FakeAudio:
     async def put_file(self, key, path, content_type):
         self.objects[key] = open(path, "rb").read()
 
+    async def download(self, key, path):
+        open(path, "wb").write(self.objects[key])
+
     async def stream(self, key):
         data = self.objects[key]
 
@@ -287,6 +290,7 @@ class FakeRender:
 
     async def render(self, spec, files, out_path):
         self.specs.append((spec, sorted(files)))
+        self.sent = {name: open(v, "rb").read() if isinstance(v, str) else v for name, v in files.items()}
         open(out_path, "wb").write(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 20000)
         return 3.5
 

@@ -108,11 +108,12 @@ class ScriptInput(InputModel):
 
 
 class JobInput(InputModel):
-    kind: Literal["research", "script", "voiceover", "scenes", "images", "thumbnail", "seo", "assembly", "publish"]
+    kind: Literal["research", "script", "voiceover", "scenes", "images", "motion", "thumbnail", "seo", "assembly", "publish"]
     privacy: Literal["private", "unlisted", "public"] = "private"   # publish
     publish_at: str = Field(default="", max_length=40)              # publish: ISO time to go public (scheduled)
     made_for_kids: bool = False
     category_id: str = Field(default="27", pattern=r"^\d{1,3}$")    # 27 Education, 22 People & Blogs
+    quality: Literal["standard", "hd"] = "standard"  # motion: 480p (about 33 s of GPU per second) or 720p (about 78 s)
     burn_subtitles: bool = False  # assembly: subtitles in the picture as well as the separate captions file
     scenes: list[int] = Field(default_factory=list, max_length=500)  # images: only these scenes (empty: all)
     voice: str = Field(default="", max_length=40, pattern=r"^([a-z]{2}_[a-z]{2,20})?$")
@@ -123,6 +124,7 @@ class JobInput(InputModel):
 class SceneEdit(InputModel):
     visual: str = Field(default="", max_length=600)
     prompt: str = Field(min_length=3, max_length=600)
+    still: bool | None = None  # keep this scene as a still image (zoom and pan) instead of motion
     version: int = Field(ge=1)
 
 
@@ -153,7 +155,7 @@ def view(project: dict[str, Any]) -> dict[str, Any]:
                       "target_words": model.target_words(project["duration_minutes"])}
 
 
-def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube: Any = None) -> FastAPI:
+def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube: Any = None, motion: bool | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app.state.store is None:
@@ -170,6 +172,7 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube
 
     app = FastAPI(title="VolumeOS Creators Home", lifespan=lifespan)
     app.state.store, app.state.voices, app.state.audio, app.state.youtube = store, voices, audio, youtube
+    app.state.motion_configured = bool(os.environ.get("MOTION_URL")) if motion is None else motion
     console = os.environ.get("CONSOLE_URL", "https://volumeos.newfire.app").rstrip("/")
     token = os.environ.get("VOLUMEOS_SERVICE_TOKEN", "")
 
@@ -447,12 +450,23 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube
                 return error(400, "invalid_request", "unknown voice")
             params = {"voice": body.voice, "speed": body.speed}
         partial = False
-        if body.kind == "images":
+        if body.kind in ("images", "motion"):
             numbers = {s["number"] for s in project["record"].get("scenes") or []}
             if body.scenes and not set(body.scenes) <= numbers:
                 return error(400, "invalid_request", "those scenes aren't in this video")
             partial = bool(body.scenes) and project["stages"]["images"]["state"] in model.FINISHED
             params = {"scenes": sorted(set(body.scenes))}
+        if body.kind == "motion":
+            if not app.state.motion_configured:
+                return error(503, "motion_not_configured", "the motion service isn't set up on this deployment")
+            if not project["record"].get("scenes"):
+                return error(409, "earlier_stage_open", "plan the scenes and make their images first")
+            wanted = [s for s in project["record"].get("scenes") or [] if (not body.scenes or s["number"] in body.scenes) and not s.get("still")]
+            if not wanted:
+                return error(400, "invalid_request", "no scenes to animate (all are set to stay still)")
+            if any(not (s.get("image") or {}).get("key") or (s.get("image") or {}).get("stale") for s in wanted):
+                return error(409, "earlier_stage_open", "every scene to animate needs its image made first")
+            params |= {"seconds": round(sum(float(s["seconds"]) for s in wanted), 1), "quality": body.quality}
         if body.kind == "publish":
             channel_link = await app.state.store.youtube(tenant, project["channel_id"])
             if app.state.youtube is None or channel_link is None:
@@ -547,11 +561,18 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube
             return error(404, "not_found", "no such scene in this video")
         if project["stages"]["images"]["state"] == "running":
             raise ProjectError("images are being made; wait for them to finish", "job_running")
-        scene.update(prompt=body.prompt.strip(), visual=body.visual.strip() or scene["visual"], edited_by=actor)
-        if scene.get("image"):
-            scene["image"]["stale"] = True
+        changed = body.prompt.strip() != scene["prompt"] or (body.visual.strip() and body.visual.strip() != scene["visual"])
+        scene.update(prompt=body.prompt.strip(), visual=body.visual.strip() or scene["visual"])
+        if changed:
+            scene["edited_by"] = actor
+            if scene.get("image"):
+                scene["image"]["stale"] = True
+            if scene.get("motion"):
+                scene["motion"]["stale"] = True
+        if body.still is not None:
+            scene["still"] = body.still
         return await save(tenant, project, body.version, {"kind": "scene_edited", "stage": "scenes", "actor": actor,
-                                                          "detail": {"scene": number}})
+                                                          "detail": {"scene": number, **({"still": body.still} if body.still is not None else {})}})
 
     @app.put("/v1/creators/projects/{project_id}/thumbnail")
     async def choose_thumbnail(project_id: str, body: ThumbnailChoice, request: Request):
@@ -584,6 +605,22 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None, youtube
         if not key or app.state.audio is None or not key.startswith(f"{who[0]}/creators/{project_id}/"):
             return error(404, "not_found", "no such image for this project")
         return Response(await app.state.audio.get(key), media_type="image/png")
+
+    @app.get("/v1/creators/projects/{project_id}/motion/{name}")
+    async def motion_clip(project_id: str, name: str, request: Request):
+        """A scene's motion clip ('scene-NNN.mp4'), streamed, from this project only."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        project = await load(who[0], project_id)
+        key = None
+        if re.fullmatch(r"scene-\d{3}\.mp4", name):
+            scene = next((s for s in project["record"].get("scenes") or [] if s["number"] == int(name[6:9])), None)
+            key = ((scene or {}).get("motion") or {}).get("key")
+        if not key or app.state.audio is None or not key.startswith(f"{who[0]}/creators/{project_id}/"):
+            return error(404, "not_found", "no such motion clip for this project")
+        size, chunks = await app.state.audio.stream(key)
+        return StreamingResponse(chunks, media_type="video/mp4", headers={"Content-Length": str(size)})
 
     @app.get("/v1/creators/projects/{project_id}/images.zip")
     async def images_zip(project_id: str, request: Request):

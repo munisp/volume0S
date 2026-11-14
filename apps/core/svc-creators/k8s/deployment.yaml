@@ -37,6 +37,7 @@ spec:
             - {name: SCRIPT_MODEL, value: "gemma4-26b-64k:latest"}
             - {name: TTS_URL, value: "http://100.88.112.5:8880"}
             - {name: IMAGE_URL, value: "http://100.88.112.5:8890"}
+            - {name: MOTION_URL, value: "http://100.88.112.5:8892"}
             - {name: RENDER_URL, value: "http://100.88.112.5:8895"}
             - {name: S3_ENDPOINT_URL, value: "http://minio.minio.svc.cluster.local:9000"}
             - {name: ASSET_BUCKET, value: volumeos-assets}
@@ -95,6 +96,7 @@ spec:
             - {name: SCRIPT_MODEL, value: "gemma4-26b-64k:latest"}
             - {name: TTS_URL, value: "http://100.88.112.5:8880"}
             - {name: IMAGE_URL, value: "http://100.88.112.5:8890"}
+            - {name: MOTION_URL, value: "http://100.88.112.5:8892"}
             - {name: RENDER_URL, value: "http://100.88.112.5:8895"}
             - {name: S3_ENDPOINT_URL, value: "http://minio.minio.svc.cluster.local:9000"}
             - {name: ASSET_BUCKET, value: volumeos-assets}

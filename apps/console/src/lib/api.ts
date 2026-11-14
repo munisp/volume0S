@@ -188,7 +188,7 @@ export class VolumeOSApi {
     return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/stages/${encodeURIComponent(stage)}/${action}`, { method: 'POST', body: { note, version } })
   }
 
-  startCreatorJob(id: string, input: { kind: 'research' | 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly' | 'publish'; voice?: string; speed?: number; scenes?: number[]; burn_subtitles?: boolean
+  startCreatorJob(id: string, input: { kind: 'research' | 'script' | 'voiceover' | 'scenes' | 'images' | 'motion' | 'thumbnail' | 'seo' | 'assembly' | 'publish'; voice?: string; speed?: number; scenes?: number[]; quality?: 'standard' | 'hd'; burn_subtitles?: boolean
     privacy?: 'private' | 'unlisted' | 'public'; publish_at?: string; made_for_kids?: boolean; version: number }) {
     return this.request<{ project: CreatorProject; job: CreatorJob }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/jobs`, { method: 'POST', body: input })
   }
@@ -201,8 +201,13 @@ export class VolumeOSApi {
 
   creatorAudio(id: string, name: string) { return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/audio/${name}`) }
 
-  editCreatorScene(id: string, scene: number, prompt: string, visual: string, version: number) {
-    return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/scenes/${scene}`, { method: 'PUT', body: { prompt, visual, version } })
+  editCreatorScene(id: string, scene: number, prompt: string, visual: string, version: number, still?: boolean) {
+    return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/scenes/${scene}`,
+      { method: 'PUT', body: still === undefined ? { prompt, visual, version } : { prompt, visual, version, still } })
+  }
+
+  creatorMotion(id: string, scene: number) {
+    return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/motion/scene-${String(scene).padStart(3, '0')}.mp4`, undefined, 300000)
   }
 
   chooseCreatorThumbnail(id: string, chosen: number, version: number) {
