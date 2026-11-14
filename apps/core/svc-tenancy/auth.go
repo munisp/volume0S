@@ -52,6 +52,10 @@ func (c Claims) Can(role string) bool {
 	if c.Roles["super-operator"] || c.Roles[role] {
 		return true
 	}
+	// A shop owner runs their own business's services: delivery, inside the business in their token (as svc-orchestrator).
+	if role == "delivery" && c.Roles["client-owner"] {
+		return true
+	}
 	if role == "reader" {
 		// Same reader set as svc-orchestrator (auth.READER_ROLES); finance was missing here.
 		for _, allowed := range []string{"delivery", "sales", "analyst", "client-owner", "partner", "auditor", "finance"} {

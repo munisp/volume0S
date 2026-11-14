@@ -257,3 +257,15 @@ def test_creators_scenes_images_and_thumbnail_routes():
         assert client.put(f"/v1/creators/projects/{PROJECT}/scenes/2", headers=auth(), json={"prompt": "x y z", "version": 1}).status_code == 200
         assert client.put(f"/v1/creators/projects/{PROJECT}/thumbnail", headers=auth(), json={"chosen": 1, "version": 1}).status_code == 200
     assert [c[1] for c in creators.calls] == [f"/projects/{PROJECT}/scenes/2", f"/projects/{PROJECT}/thumbnail"]
+
+
+def test_a_shop_owner_runs_their_own_services_but_nothing_more():
+    from auth import Claims as C
+    owner = C("tani", "owner-sub", frozenset({"client-owner"}))
+    assert owner.can("delivery") and owner.can("reader")
+    assert not owner.can("sales") and not owner.can("finance") and not owner.can("super-operator") and not owner.can("analyst")
+    creators = FakeCreators()
+    with TestClient(create_app(FakeWorkflows(), FakeAuthenticator(owner), FakeQAAssets(), people=FakePeople(), creators=creators)) as client:
+        assert client.post("/v1/creators/channels", headers=auth(), json={"name": "Tani"}).status_code == 201
+        assert client.get("/v1/people", headers=auth()).status_code == 403  # running the team stays with super operators
+    assert creators.calls[0][2] == "tani"

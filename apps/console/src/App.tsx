@@ -65,6 +65,11 @@ const CLIENT_ROUTES: RouteDef[] = [
   { path: '/services', title: 'Services', element: <CataloguePage readOnly /> },
   { path: '/engagements', title: 'Engagements', element: <EngagementsPage clientView /> },
   { path: '/engagements/:id', title: 'Engagement', section: 'Engagements', sectionTo: '/engagements', element: <EngagementsPage clientView /> },
+  { path: '/services/campaigns', title: 'Campaigns', section: 'Your services', element: <CampaignsPage /> },
+  { path: '/services/studio', title: 'Shopfront Studio', section: 'Your services', element: <StudioPage /> },
+  { path: '/services/studio/:id', title: 'Studio pack', section: 'Shopfront Studio', sectionTo: '/services/studio', element: <StudioPage /> },
+  { path: '/services/creators', title: 'Creators Home', section: 'Your services', element: <CreatorsPage /> },
+  { path: '/services/creators/:id', title: 'Video project', section: 'Creators Home', sectionTo: '/services/creators', element: <CreatorsPage /> },
   { path: '/wallet', title: 'Wallet & billing', element: <WalletPage /> },
   { path: '/profile', title: 'Business profile', element: <ProfilePage /> },
   { path: '/billing/callback', title: 'Payment submitted', section: 'Wallet & billing', sectionTo: '/wallet', element: <PaymentReturnPage backTo="/wallet" backLabel="Back to your wallet" /> },
@@ -145,10 +150,14 @@ function ClientApp() {
   const crumbs = useCrumbs(CLIENT_ROUTES)
   const groups: NavGroup[] = [{ items: [
     { to: '/', label: 'Home', icon: Gauge, end: true },
-    { to: '/services', label: 'Services', icon: BookOpen },
+    { to: '/services', label: 'Services', icon: BookOpen, end: true },
     { to: '/engagements', label: 'Engagements', icon: ClipboardCheck },
     { to: '/wallet', label: 'Wallet & billing', icon: Wallet },
     { to: '/profile', label: 'Business profile', icon: UserRound },
+  ] }, { label: 'Your services', items: [
+    { to: '/services/campaigns', label: 'Campaigns', icon: Megaphone },
+    { to: '/services/studio', label: 'Shopfront Studio', icon: ImageIcon },
+    { to: '/services/creators', label: 'Creators Home', icon: Clapperboard },
   ] }]
   return <Shell groups={groups} crumbs={crumbs} footnote="Your workspace with your agency">
     <Routes>

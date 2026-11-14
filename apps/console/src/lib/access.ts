@@ -51,6 +51,8 @@ export function rolesFromToken(token: string | null | undefined): Roles {
 /** Same rule as the servers: super-operator can do anything; `reader` is satisfied by any reader-class role. */
 export function can(roles: Roles, role: string): boolean {
   if (roles.has('super-operator') || roles.has(role)) return true
+  // A shop owner runs their own business's services (servers: the same rule in Claims.can).
+  if (role === 'delivery' && roles.has('client-owner')) return true
   if (role === 'reader') return [...roles].some(item => READER_ROLES.has(item))
   return false
 }

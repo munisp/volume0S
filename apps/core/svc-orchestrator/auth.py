@@ -31,8 +31,11 @@ class Claims:
     platform: bool = False
 
     def can(self, role: str) -> bool:
+        # A shop owner runs their own business's services (campaigns, Studio, Creators Home): the delivery role, only
+        # ever inside the business in their token. Money still moves only through approvals and the wallet.
         return ("super-operator" in self.roles or role in self.roles
-                or (role == "reader" and bool(self.roles & READER_ROLES)))
+                or (role == "reader" and bool(self.roles & READER_ROLES))
+                or (role == "delivery" and "client-owner" in self.roles))
 
 
 def scope_claims(claims: Claims, requested: str | None) -> Claims:
