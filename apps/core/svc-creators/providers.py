@@ -183,7 +183,10 @@ class AudioStore:
             raise RuntimeError("ASSET_BUCKET is required")
         if client is None:
             import boto3
-            client = boto3.client("s3", endpoint_url=os.environ.get("S3_ENDPOINT_URL") or None)
+            from botocore.config import Config
+            # Retries with backoff: a dropped connection to the store is retried, not a failed job.
+            client = boto3.client("s3", endpoint_url=os.environ.get("S3_ENDPOINT_URL") or None,
+                                  config=Config(retries={"max_attempts": 8, "mode": "standard"}, max_pool_connections=8))
         self.bucket, self.client = bucket, client
 
     @classmethod
@@ -202,7 +205,10 @@ class AudioStore:
         await asyncio.to_thread(self.client.put_object, Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
     async def put_file(self, key: str, path: str, content_type: str) -> None:
-        await asyncio.to_thread(self.client.upload_file, path, self.bucket, key, ExtraArgs={"ContentType": content_type})
+        from boto3.s3.transfer import TransferConfig
+        # Large videos go up in a few big parts at a time; ten parallel parts overwhelmed the shared MinIO.
+        transfer = TransferConfig(multipart_threshold=64 << 20, multipart_chunksize=32 << 20, max_concurrency=3)
+        await asyncio.to_thread(self.client.upload_file, path, self.bucket, key, ExtraArgs={"ContentType": content_type}, Config=transfer)
 
     async def stream(self, key: str):
         """The object's size and an async iterator over it (a whole video is never held in memory)."""

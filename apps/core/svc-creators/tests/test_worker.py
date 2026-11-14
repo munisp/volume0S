@@ -335,3 +335,22 @@ def test_scene_spans_add_up_to_the_recording():
     for planned, target in (([1.0, 2.0, 0.01], 10.0), ([0.3] * 5, 0.8), ([5.5, 4.4], 9.9)):
         spans = scene_spans(planned, target)
         assert abs(sum(spans) - target) < 1e-6 and all(x > 0 for x in spans)
+
+
+async def test_a_stopping_worker_hands_its_job_back(setup):
+    import asyncio
+    from worker import serve
+    client, store, voices, audio = setup
+    p = approved_title_project(client)
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "script", "version": p["version"]})
+
+    class SlowWriter(FakeWriter):
+        async def outline(self, *a):
+            await asyncio.sleep(30)
+
+    worker, stop = Worker(store, SlowWriter(), voices, audio), asyncio.Event()
+    running = asyncio.ensure_future(serve(worker, stop))
+    await asyncio.sleep(0.2)
+    stop.set(); await asyncio.wait_for(running, 5)
+    job = (await store.jobs("acme", p["id"]))[0]
+    assert job["status"] == "queued" and job["attempts"] == 0  # the next worker takes it straight away

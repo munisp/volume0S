@@ -304,7 +304,7 @@ class PostgresCreatorStore:
                                   uuid.UUID(project_id), limit)
         return [self._job(row) for row in rows]
 
-    async def claim_job(self, lease_minutes: int = 45, max_attempts: int = 3) -> dict[str, Any] | None:
+    async def claim_job(self, lease_minutes: int = 10, max_attempts: int = 3) -> dict[str, Any] | None:
         """The oldest queued job (or one whose worker stopped renewing its lease), for this worker alone."""
         async with self.pool.acquire() as connection:
             async with connection.transaction():
@@ -324,10 +324,16 @@ class PostgresCreatorStore:
                 rows = await connection.fetch("SELECT * FROM creator_jobs WHERE status='running' AND lease_until < now() AND attempts >= $1", max_attempts)
         return [self._job(row) for row in rows]
 
-    async def job_progress(self, tenant: str, job_id: str, progress: str, lease_minutes: int = 45) -> None:
+    async def job_progress(self, tenant: str, job_id: str, progress: str, lease_minutes: int = 10) -> None:
         async with self.tenant_tx(tenant) as tx:
             await tx.execute("UPDATE creator_jobs SET progress=$2, lease_until=now() + make_interval(mins => $3) WHERE id=$1",
                              uuid.UUID(job_id), progress[:300], lease_minutes)
+
+    async def release_job(self, tenant: str, job_id: str) -> None:
+        """A stopping worker hands its job back: queued again at once, this attempt not counted."""
+        async with self.tenant_tx(tenant) as tx:
+            await tx.execute("UPDATE creator_jobs SET status='queued', attempts=greatest(attempts-1, 0), lease_until=NULL,"
+                             " progress='waiting for a worker' WHERE id=$1 AND status='running'", uuid.UUID(job_id))
 
     async def finish_job(self, tenant: str, job_id: str, ok: bool, error: str = "") -> None:
         async with self.tenant_tx(tenant) as tx:
@@ -417,7 +423,7 @@ class InMemoryCreatorStore:
         rows = [copy.deepcopy(j) for j in self.job_rows.values() if j["tenant_id"] == tenant and j["project_id"] == project_id]
         return sorted(rows, key=lambda j: j["created_at"], reverse=True)[:limit]
 
-    async def claim_job(self, lease_minutes=45, max_attempts=3):
+    async def claim_job(self, lease_minutes=10, max_attempts=3):
         for job in sorted(self.job_rows.values(), key=lambda j: j["created_at"]):
             if job["status"] == "queued" and job["attempts"] < max_attempts:
                 job.update(status="running", attempts=job["attempts"] + 1, started_at=now())
@@ -427,7 +433,12 @@ class InMemoryCreatorStore:
     async def abandoned_jobs(self, max_attempts=3):
         return []
 
-    async def job_progress(self, tenant, job_id, progress, lease_minutes=45):
+    async def release_job(self, tenant, job_id):
+        job = self.job_rows[job_id]
+        if job["status"] == "running":
+            job.update(status="queued", attempts=max(job["attempts"] - 1, 0))
+
+    async def job_progress(self, tenant, job_id, progress, lease_minutes=10):
         self.job_rows[job_id]["progress"] = progress
 
     async def finish_job(self, tenant, job_id, ok, error=""):

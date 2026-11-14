@@ -66,6 +66,8 @@ def scene_spans(planned: list[float], target: float, floor: float = 0.2) -> list
 class Worker:
     def __init__(self, store: Any, writer: Any, voices: Any, audio: Any, images: Any = None, renderer: Any = None):
         self.store, self.writer, self.voices, self.audio, self.images, self.renderer = store, writer, voices, audio, images, renderer
+        self.current: dict[str, Any] | None = None  # the job in hand (handed back if the worker is stopped)
+        self.last_progress = ""
 
     async def save(self, tenant: str, project_id: str, change, event: dict[str, Any]) -> dict[str, Any]:
         """Applies `change` to the latest version of the project; retries if someone saved in between."""
@@ -81,7 +83,17 @@ class Worker:
         raise ProviderError("the project kept changing while the result was being saved")
 
     async def progress(self, job: dict[str, Any], text: str) -> None:
+        self.last_progress = text
         await self.store.job_progress(job["tenant_id"], job["id"], text)
+
+    async def heartbeat(self, job: dict[str, Any]) -> None:
+        """Keeps the job's lease while one long step runs (a render can take longer than the lease)."""
+        while True:
+            await asyncio.sleep(120)
+            try:
+                await self.store.job_progress(job["tenant_id"], job["id"], self.last_progress)
+            except Exception:  # noqa: BLE001 - a missed beat only shortens the lease
+                log.warning("lease renewal failed for job %s", job["id"])
 
     async def run_script(self, job: dict[str, Any]) -> str:
         tenant, pid = job["tenant_id"], job["project_id"]
@@ -314,6 +326,8 @@ class Worker:
         if job is None:
             return False
         log.info("job %s %s for %s/%s (attempt %s)", job["id"], job["kind"], job["tenant_id"], job["project_id"], job["attempts"])
+        self.current, self.last_progress = job, "started"
+        beat = asyncio.ensure_future(self.heartbeat(job))
         try:
             runner = {"script": self.run_script, "voiceover": self.run_voiceover, "scenes": self.run_scenes,
                       "images": self.run_images, "thumbnail": self.run_thumbnail, "seo": self.run_seo,
@@ -326,7 +340,33 @@ class Worker:
         except Exception as exc:  # noqa: BLE001 - recorded on the stage; the loop keeps serving other jobs
             log.exception("job %s failed", job["id"])
             await self.fail(job, f"unexpected error ({exc.__class__.__name__})")
+        finally:
+            beat.cancel()
+            self.current = None
         return True
+
+
+async def serve(worker: Worker, stop: asyncio.Event) -> None:
+    """Runs jobs until told to stop. On SIGTERM (a redeploy) the job in hand is handed back, so the next worker
+    starts it at once instead of it waiting out its lease."""
+    while not stop.is_set():
+        task = asyncio.ensure_future(worker.once())
+        stopper = asyncio.ensure_future(stop.wait())
+        done, _ = await asyncio.wait({task, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            stopper.cancel()
+            if not task.result():
+                try:
+                    await asyncio.wait_for(stop.wait(), 3)
+                except asyncio.TimeoutError:
+                    pass
+            continue
+        task.cancel()
+        job = worker.current
+        if job is not None:
+            await worker.store.release_job(job["tenant_id"], job["id"])
+            log.info("stopping: job %s handed back", job["id"])
+        return
 
 
 async def main() -> None:
@@ -337,9 +377,11 @@ async def main() -> None:
         raise SystemExit("TTS_URL, CREATORS_TTS_TOKEN and ASSET_BUCKET are required")
     worker = Worker(store, OllamaWriter.from_env(), voices, audio, ImageService.from_env(), RenderService.from_env())
     log.info("creators-worker ready (script model %s)", worker.writer.model)
-    while True:
-        if not await worker.once():
-            await asyncio.sleep(3)
+    import signal
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        asyncio.get_running_loop().add_signal_handler(sig, stop.set)
+    await serve(worker, stop)
 
 
 if __name__ == "__main__":
