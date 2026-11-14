@@ -13,7 +13,7 @@ import boto3
 import uvicorn
 from fastapi import Body, Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from temporalio.client import Client
 from temporalio.exceptions import TemporalError, WorkflowAlreadyStartedError
@@ -568,6 +568,11 @@ def create_app(workflows: Any = None, authenticator: Any = None, qa_assets: Any 
     async def creator_images_zip(project_id: CreatorId, claims: Claims = Depends(need("reader"))):
         data, media, disposition = await creators_service().raw("GET", f"/projects/{project_id}/images.zip", claims.tenant_id, claims.actor)
         return Response(data, media_type=media, headers={"Content-Disposition": disposition} if disposition else None)
+
+    @app.get("/v1/creators/projects/{project_id}/video/{name}")
+    async def creator_video(project_id: CreatorId, name: Literal["video.mp4", "captions.srt"], claims: Claims = Depends(need("reader"))):
+        body, headers = await creators_service().stream(f"/projects/{project_id}/video/{name}", claims.tenant_id, claims.actor)
+        return StreamingResponse(body, media_type=headers.pop("content-type", "application/octet-stream"), headers=headers)
 
     @app.get("/v1/creators/projects/{project_id}/events")
     async def creator_events(project_id: CreatorId, claims: Claims = Depends(need("reader"))):

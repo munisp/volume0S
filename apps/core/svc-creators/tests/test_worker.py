@@ -64,6 +64,16 @@ class FakeAudio:
     async def get(self, key, limit=0):
         return self.objects[key]
 
+    async def put_file(self, key, path, content_type):
+        self.objects[key] = open(path, "rb").read()
+
+    async def stream(self, key):
+        data = self.objects[key]
+
+        async def chunks():
+            yield data
+        return len(data), chunks()
+
 
 def headers(tenant="acme", actor="ada@acme.ng"):
     return {"Authorization": "Bearer " + "t" * 40, "X-VolumeOS-Tenant": tenant, "X-VolumeOS-Actor": actor}
@@ -190,6 +200,11 @@ class VisualWriter(FakeWriter):
             n = int(re.search(r"cut into (\d+) scenes", ask).group(1))
             return json.dumps({"scenes": [{"visual": f"shot {i}", "prompt": f"Tunde checks his phone, scene {i}", "camera": "close-up",
                                            "lighting": "warm"} for i in range(n)]})
+        if "publishing package" in ask:
+            return json.dumps({"description": "Where your salary goes, explained with real examples. " * 12, "primary_keywords": ["salary", "budget", "savings"],
+                               "secondary_keywords": ["a", "b"], "long_tail_keywords": ["where does my salary go"], "tags": [f"tag number {i}" for i in range(40)],
+                               "hashtags": ["#money", "salary"], "pinned_comment": "Where does your money go first?", "playlist": "Money basics",
+                               "end_screen": "A budgeting video, the natural next step.", "cards": [{"at": "0:00", "suggest": "budget video"}]})
         return json.dumps({"concepts": [{"angle": "shock", "caption": "Gone By The 15th", "prompt": "empty wallet on a desk", "text_side": "left"},
                                         {"angle": "hope", "caption": "Where Your Salary Goes", "prompt": "x", "text_side": "right"},
                                         {"angle": "fear", "caption": "The Silent Leak", "prompt": "a leaking tap of naira notes", "text_side": "right"}]})
@@ -264,3 +279,59 @@ def test_scene_split_keeps_every_word_in_order():
     text = "First sentence here. " * 30 + "\n\nA final short line."
     scenes = model.split_scenes(text)
     assert " ".join(scenes).split() == text.split() and all(len(s.split()) >= 8 for s in scenes)
+
+
+class FakeRender:
+    def __init__(self):
+        self.specs = []
+
+    async def render(self, spec, files, out_path):
+        self.specs.append((spec, sorted(files)))
+        open(out_path, "wb").write(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 20000)
+        return 3.5
+
+
+async def test_seo_and_the_finished_video(setup):
+    client, store, voices, audio = setup
+    images, render = FakeImages(), FakeRender()
+    worker = Worker(store, VisualWriter(), voices, audio, images, render)
+    p = await voiced_project(client, store, voices, audio)
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "scenes", "version": p["version"]}); await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    # SEO: from the script, chapters at the recorded times, tags inside YouTube's limit; it resets nothing.
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "seo", "version": p["version"]}); await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    seo = p["record"]["seo"]
+    assert state(p, "seo") == "done" and state(p, "scenes") == "done" and seo["chapters"][0]["time"] == "0:00"
+    assert sum(len(t) + 1 for t in seo["tags"]) <= 480 and seo["hashtags"] == ["#money", "#salary"] and "Chapters:" in seo["full_description"]
+    assert client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "assembly", "version": p["version"]}).status_code == 409
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "images", "version": p["version"]}); await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    r = client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "assembly", "burn_subtitles": True, "version": p["version"]})
+    assert r.status_code == 202
+    await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    spec, names = render.specs[-1]
+    voice = {v["index"]: v["seconds"] for v in p["record"]["voiceover"]["sections"]}
+    assert abs(sum(sc["seconds"] for sc in spec["scenes"]) - sum(voice.values())) < 0.01  # picture and voice line up exactly
+    assert spec["burn_subtitles"] is True and all(n.endswith((".jpg", ".wav")) for n in names)
+    assert state(p, "assembly") == "done" and state(p, "final_review") == "needs_approval" and p["record"]["video"]["burned_subtitles"]
+    got = client.get(f"/v1/creators/projects/{p['id']}/video/video.mp4", headers=headers())
+    assert got.status_code == 200 and got.content[4:8] == b"ftyp"
+    srt = client.get(f"/v1/creators/projects/{p['id']}/video/captions.srt", headers=headers()).text
+    assert srt.startswith("1\n00:00:00,000 --> ") and "-->" in srt
+    assert client.get(f"/v1/creators/projects/{p['id']}/video/video.mp4", headers=headers("other")).status_code == 404
+    # Final review is of the whole package: it waits for the thumbnail too.
+    assert client.post(f"/v1/creators/projects/{p['id']}/stages/final_review/approve", headers=headers(), json={"version": p["version"]}).status_code == 409
+    client.post(f"/v1/creators/projects/{p['id']}/jobs", headers=headers(), json={"kind": "thumbnail", "version": p["version"]}); await worker.once()
+    p = client.get(f"/v1/creators/projects/{p['id']}", headers=headers()).json()
+    assert state(p, "assembly") == "done"  # making the thumbnail doesn't undo the video
+    p = client.post(f"/v1/creators/projects/{p['id']}/stages/final_review/approve", headers=headers(), json={"version": p["version"]}).json()
+    assert state(p, "final_review") == "approved" and p["current_stage"] == "publishing"
+
+
+def test_scene_spans_add_up_to_the_recording():
+    from worker import scene_spans
+    for planned, target in (([1.0, 2.0, 0.01], 10.0), ([0.3] * 5, 0.8), ([5.5, 4.4], 9.9)):
+        spans = scene_spans(planned, target)
+        assert abs(sum(spans) - target) < 1e-6 and all(x > 0 for x in spans)

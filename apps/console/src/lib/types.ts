@@ -353,6 +353,10 @@ export type CreatorProject = {
     script?: { text: string; sections: CreatorScriptSection[]; words: number; target_words: number; estimated_minutes: number; source: string; updated_at: string }
     approvals?: Record<string, { by: string; at: string; note: string }>
     characters?: { name: string; look: string }[]
+    seo?: { description: string; full_description: string; primary_keywords: string[]; secondary_keywords: string[]; long_tail_keywords: string[]
+      tags: string[]; hashtags: string[]; chapters: { time: string; title: string }[]; pinned_comment: string; playlist: string; end_screen: string
+      cards: { at: string; suggest: string }[]; keyword_note: string; made_at: string }
+    video?: { key: string; captions_key: string; bytes: number; seconds: number; width: number; height: number; burned_subtitles: boolean; render_seconds: number; made_at: string }
     scenes?: CreatorScene[]
     thumbnail?: { options: { angle: string; caption: string; prompt: string; text_side: string; key: string; seed: number }[]; chosen: number | null; made_at: string }
     voiceover?: { voice: string; speed: number; script_sha256: string; total_seconds: number; provider: string; updated_at: string;

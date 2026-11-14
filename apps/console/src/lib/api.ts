@@ -188,7 +188,7 @@ export class VolumeOSApi {
     return this.request<CreatorProject>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/stages/${encodeURIComponent(stage)}/${action}`, { method: 'POST', body: { note, version } })
   }
 
-  startCreatorJob(id: string, input: { kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail'; voice?: string; speed?: number; scenes?: number[]; version: number }) {
+  startCreatorJob(id: string, input: { kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly'; voice?: string; speed?: number; scenes?: number[]; burn_subtitles?: boolean; version: number }) {
     return this.request<{ project: CreatorProject; job: CreatorJob }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/jobs`, { method: 'POST', body: input })
   }
 
@@ -211,6 +211,9 @@ export class VolumeOSApi {
   creatorImage(id: string, name: string) { return this.blobUrl(`/v1/creators/projects/${encodeURIComponent(id)}/images/${name}`) }
 
   creatorScenesZip(id: string) { return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/scene-images.zip`) }
+
+  /** The finished video or its captions, downloaded with the user's token (minutes for a long video). */
+  creatorVideo(id: string, name: 'video.mp4' | 'captions.srt') { return this.audioUrl(`/v1/creators/projects/${encodeURIComponent(id)}/video/${name}`, undefined, 900000) }
 
   creatorEvents(id: string) { return this.request<{ events: CreatorEvent[] }>(this.orchestratorUrl, `/v1/creators/projects/${encodeURIComponent(id)}/events`) }
 
@@ -239,7 +242,7 @@ export class VolumeOSApi {
   }
 
   /** Audio fetched with the user's token (voice previews, narration): a local URL for an <audio> player. */
-  async audioUrl(path: string, body?: unknown): Promise<string> {
+  async audioUrl(path: string, body?: unknown, timeoutMs = 180000): Promise<string> {
     const accessToken = await this.token()
     if (!accessToken) throw new ApiError('Sign in to continue.', 401)
     const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` }
@@ -247,7 +250,7 @@ export class VolumeOSApi {
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     const response = await fetch(this.orchestratorUrl + path, {
       method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body),
-      headers, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(180000),
+      headers, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) {
       let message = `The audio couldn't be loaded (${response.status}).`

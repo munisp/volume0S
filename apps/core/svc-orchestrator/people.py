@@ -136,3 +136,32 @@ class CreatorsService(PeopleService):
                                      str(detail.get("code") or "creators_error"))
         return response.content, response.headers.get("content-type", "application/octet-stream"), \
             response.headers.get("content-disposition", "")
+
+    async def stream(self, path: str, tenant_id: str, actor: str):
+        """A large file from svc-creators (the finished video), passed through chunk by chunk, never held in memory."""
+        headers = {"Authorization": f"Bearer {self.service_token}", "X-VolumeOS-Tenant": tenant_id}
+        if actor:
+            headers["X-VolumeOS-Actor"] = actor
+        client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0))
+        try:
+            response = await client.send(client.build_request("GET", self.base_url + "/v1/creators" + path, headers=headers), stream=True)
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            raise PeopleServiceError(f"{self.name} is unavailable.") from exc
+        if response.is_error:
+            body = await response.aread(); await response.aclose(); await client.aclose()
+            try:
+                detail = __import__("json").loads(body).get("error") or {}
+            except ValueError:
+                detail = {}
+            raise PeopleServiceError(str(detail.get("message") or f"{self.name} request failed."),
+                                     response.status_code if response.status_code in {400, 404, 409} else 503, str(detail.get("code") or "creators_error"))
+
+        async def body():
+            try:
+                async for chunk in response.aiter_bytes(1 << 20):
+                    yield chunk
+            finally:
+                await response.aclose(); await client.aclose()
+        passthrough = {k: v for k, v in response.headers.items() if k.lower() in ("content-type", "content-length", "content-disposition")}
+        return body(), passthrough

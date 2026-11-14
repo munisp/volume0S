@@ -78,7 +78,7 @@ def set_state(stages: dict[str, dict[str, Any]], stage: str, state: str, note: s
 
 # Stages that don't build on every stage before them: the thumbnail comes from the title and the approved script, so
 # remaking the voice, scenes or images leaves it alone.
-BUILT_ON = {"thumbnail": "script_approval"}
+BUILT_ON = {"thumbnail": "script_approval", "seo": "voiceover"}
 
 
 def reset_after(stages: dict[str, dict[str, Any]], stage: str) -> list[str]:
@@ -156,11 +156,14 @@ def script_record(text: str, duration_minutes: int, source: str) -> dict[str, An
 # Jobs: work the creators worker does for a stage. A job can only start when the stages before its stage are finished
 # (an approved title before the script; an approved script before the voice), and starting one sends everything
 # built on its stage back to not started.
-JOB_STAGE = {"script": "script", "voiceover": "voiceover", "scenes": "scenes", "images": "images", "thumbnail": "thumbnail"}
+JOB_STAGE = {"script": "script", "voiceover": "voiceover", "scenes": "scenes", "images": "images", "thumbnail": "thumbnail",
+             "seo": "seo", "assembly": "assembly"}
 # What has to be finished first: an approved title before the script, the approved script before the voice and the
 # thumbnail, the voiceover (its timings) before the scenes, the scenes before their images.
 JOB_NEEDS = {"script": "title", "voiceover": "script_approval", "scenes": "voiceover", "images": "scenes",
-             "thumbnail": "script_approval"}
+             "thumbnail": "script_approval", "seo": "voiceover", "assembly": "images"}
+# Jobs whose result nothing later is built on: making them again resets nothing.
+SIDE_JOBS = {"thumbnail", "seo"}
 SCENE_WORDS = 25  # about 10 seconds of narration per scene
 VOICE_SPEEDS = (0.6, 1.6)
 
@@ -177,7 +180,7 @@ def start_job(stages: dict[str, dict[str, Any]], kind: str, partial: bool = Fals
     if kind == "script" and stages["script_approval"]["state"] == "approved":
         raise ProjectError("the script is approved; reopen it to write a new one", "invalid_state")
     # The thumbnail doesn't depend on the scenes or images, and remaking some images keeps the rest: nothing else changes.
-    reset = [] if kind == "thumbnail" or partial else reset_after(stages, stage)
+    reset = [] if kind in SIDE_JOBS or partial else reset_after(stages, stage)
     set_state(stages, stage, "running", "queued")
     return reset
 
@@ -190,6 +193,8 @@ def finish_job(stages: dict[str, dict[str, Any]], kind: str, ok: bool, note: str
     set_state(stages, stage, "done", note)
     if kind == "script":
         set_state(stages, "script_approval", "needs_approval")
+    if kind == "assembly":
+        set_state(stages, "final_review", "needs_approval")
 
 
 def script_outline_size(duration_minutes: int) -> int:

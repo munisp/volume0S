@@ -201,6 +201,25 @@ class AudioStore:
     async def put(self, key: str, data: bytes, content_type: str = "audio/wav") -> None:
         await asyncio.to_thread(self.client.put_object, Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
+    async def put_file(self, key: str, path: str, content_type: str) -> None:
+        await asyncio.to_thread(self.client.upload_file, path, self.bucket, key, ExtraArgs={"ContentType": content_type})
+
+    async def stream(self, key: str):
+        """The object's size and an async iterator over it (a whole video is never held in memory)."""
+        obj = await asyncio.to_thread(self.client.get_object, Bucket=self.bucket, Key=key)
+        body = obj["Body"]
+
+        async def chunks():
+            try:
+                while True:
+                    data = await asyncio.to_thread(body.read, 1 << 20)
+                    if not data:
+                        break
+                    yield data
+            finally:
+                body.close()
+        return obj.get("ContentLength", 0), chunks()
+
     async def get(self, key: str, limit: int = 300_000_000) -> bytes:
         def read() -> bytes:
             obj = self.client.get_object(Bucket=self.bucket, Key=key)
@@ -334,3 +353,116 @@ def caption_thumbnail(background: bytes, caption: str, side: str, size: tuple[in
         draw.text((x, y), line, font=font, fill=(255, 255, 255), stroke_width=max(4, font_size // 14), stroke_fill=(10, 10, 10))
         y += line_h
     out = io.BytesIO(); image.save(out, format="PNG"); return out.getvalue()
+
+
+# SEO package and the finished video -----------------------------------------------------------------------------
+def clock(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def chapter_marks(sections: list[dict[str, Any]], voice_sections: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """YouTube chapters from the recorded chapters: the first at 0:00, each at the time its narration starts."""
+    seconds = {v["index"]: v["seconds"] for v in voice_sections}
+    marks, t = [], 0.0
+    for section in sections:
+        marks.append({"time": clock(t), "title": re.sub(r"^(chapter|part|scene)\s*\d+\s*[:.\-–]\s*", "", section["heading"], flags=re.I)[:90]})
+        t += seconds.get(section["index"], 0.0)
+    return marks
+
+
+async def seo_package(writer: "OllamaWriter", system: str, title: str, script: str, chapters: list[dict[str, str]]) -> dict[str, Any]:
+    """The publishing package from the script itself. Keywords are suggestions from the content: no search volumes are
+    claimed, because none are measured here."""
+    listing = "\n".join(f"{c['time']} {c['title']}" for c in chapters)
+    ask = (f"Video title: {title}\nChapters:\n{listing}\nScript:\n\"\"\"{script[:16000]}\"\"\"\n\nWrite the YouTube publishing "
+           "package for THIS video, based only on what the script says:\n"
+           "- description: 150-300 words, natural and specific, the main keyword in the first sentence, no hashtags, no links, "
+           "no timestamps (they are added separately)\n- primary_keywords: 3; secondary_keywords: 5; long_tail_keywords: 5\n"
+           "- tags: 10-15 short tags\n- hashtags: 3 (each starting with #)\n- pinned_comment: one friendly question that invites replies\n"
+           "- playlist: a playlist name this video belongs in\n- end_screen: which kind of video to suggest next and why (one sentence)\n"
+           "- cards: up to 2 moments to show a card, each {\"at\": a chapter time from the list, \"suggest\": what to link}\n"
+           'Answer as JSON with exactly those keys.')
+    value = await _json_chat(writer, system, ask, 2500)
+    def strings(key: str, limit: int) -> list[str]:
+        items = value.get(key) or []
+        return [re.sub(r"\s+", " ", str(i)).strip()[:100] for i in items if str(i).strip()][:limit] if isinstance(items, list) else []
+    tags, total = [], 0
+    for tag in strings("tags", 20):  # YouTube allows 500 characters of tags in all
+        if total + len(tag) + 1 <= 480:
+            tags.append(tag.lstrip("#")); total += len(tag) + 1
+    description = str(value.get("description", "")).strip()
+    if len(description.split()) < 60:
+        raise ProviderError("the script model wrote too short a description; try again")
+    hashtags = [h if h.startswith("#") else "#" + h.replace(" ", "") for h in strings("hashtags", 3)]
+    full = description + "\n\nChapters:\n" + "\n".join(f"{c['time']} {c['title']}" for c in chapters) + ("\n\n" + " ".join(hashtags) if hashtags else "")
+    cards = [{"at": str(c.get("at", ""))[:10], "suggest": str(c.get("suggest", ""))[:160]} for c in (value.get("cards") or [])[:2] if isinstance(c, dict)]
+    return {"description": description, "full_description": full[:5000], "primary_keywords": strings("primary_keywords", 3),
+            "secondary_keywords": strings("secondary_keywords", 5), "long_tail_keywords": strings("long_tail_keywords", 5),
+            "tags": tags, "hashtags": hashtags, "chapters": chapters, "pinned_comment": str(value.get("pinned_comment", "")).strip()[:500],
+            "playlist": str(value.get("playlist", "")).strip()[:150], "end_screen": str(value.get("end_screen", "")).strip()[:300],
+            "cards": cards, "keyword_note": "Suggested from the script; search volumes are not measured."}
+
+
+def captions(scenes: list[dict[str, Any]]) -> str:
+    """SRT from the scenes' narration and timings (the same cues the render service burns in)."""
+    def stamp(seconds: float) -> str:
+        ms = int(round(seconds * 1000))
+        return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+    cues, start, n = [], 0.0, 1
+    for scene in scenes:
+        words, seconds = scene["narration"].split(), float(scene["seconds"])
+        chunks, current = [], []
+        for word in words:
+            if current and len(" ".join(current + [word])) > 84:
+                chunks.append(current); current = []
+            current.append(word)
+        if current:
+            chunks.append(current)
+        t = start
+        for chunk in chunks:
+            length = seconds * len(chunk) / max(len(words), 1)
+            text = " ".join(chunk)
+            if len(text) > 42:
+                cut = text.rfind(" ", 0, len(text) // 2 + 6)
+                text = text[:cut] + "\n" + text[cut + 1:] if cut > 0 else text
+            cues.append(f"{n}\n{stamp(t)} --> {stamp(t + length - 0.05)}\n{text}\n"); n += 1; t += length
+        start += seconds
+    return "\n".join(cues)
+
+
+class RenderService:
+    """creators-render on ghana: scene images + chapter audio + timings in, MP4 out (streamed to a file)."""
+
+    def __init__(self, base_url: str, token: str, timeout: float = 3600.0):
+        if not base_url or len(token) < 32:
+            raise RuntimeError("RENDER_URL and CREATORS_TTS_TOKEN are required")
+        self.base_url, self.token, self.timeout = base_url.rstrip("/"), token, timeout
+
+    @classmethod
+    def from_env(cls) -> "RenderService | None":
+        url, token = os.environ.get("RENDER_URL", ""), os.environ.get("CREATORS_TTS_TOKEN", "")
+        return cls(url, token) if url and token else None
+
+    async def render(self, spec: dict[str, Any], files: dict[str, bytes], out_path: str) -> float:
+        multipart = [("spec", ("spec.json", json.dumps(spec).encode(), "application/json"))]
+        multipart += [(name, (name, data, "application/octet-stream")) for name, data in files.items()]
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream("POST", self.base_url + "/v1/render", files=multipart,
+                                         headers={"Authorization": f"Bearer {self.token}"}) as response:
+                    if response.status_code != 200:
+                        detail = (await response.aread()).decode(errors="replace")[:400]
+                        raise ProviderError(f"the render service failed ({response.status_code}): {detail}")
+                    with open(out_path, "wb") as out:
+                        async for chunk in response.aiter_bytes(1 << 20):
+                            out.write(chunk)
+                    return float(response.headers.get("x-render-seconds", "0") or 0)
+        except httpx.HTTPError as exc:
+            raise ProviderError("the render service didn't answer") from exc
+
+
+def to_jpeg(png: bytes, quality: int = 92) -> bytes:
+    """Scene images travel to the render service as JPEG (a quarter of the size; the video is compressed anyway)."""
+    from PIL import Image
+    out = io.BytesIO(); Image.open(io.BytesIO(png)).convert("RGB").save(out, format="JPEG", quality=quality); return out.getvalue()

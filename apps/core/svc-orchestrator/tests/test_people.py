@@ -269,3 +269,23 @@ def test_a_shop_owner_runs_their_own_services_but_nothing_more():
         assert client.post("/v1/creators/channels", headers=auth(), json={"name": "Tani"}).status_code == 201
         assert client.get("/v1/people", headers=auth()).status_code == 403  # running the team stays with super operators
     assert creators.calls[0][2] == "tani"
+
+
+class FakeCreatorsStream(FakeCreatorsAudio):
+    async def stream(self, path, tenant_id, actor):
+        self.calls.append(("STREAM", path, tenant_id, actor, None, None))
+
+        async def body():
+            yield b"\x00\x00\x00\x18ftyp"
+        return body(), {"content-type": "video/mp4", "content-length": "8"}
+
+
+def test_creators_video_streams_to_readers():
+    reader = Claims("demo-tenant", "reader-sub", frozenset({"reader"}))
+    creators = FakeCreatorsStream()
+    with TestClient(create_app(FakeWorkflows(), FakeAuthenticator(reader), FakeQAAssets(), people=FakePeople(), creators=creators)) as client:
+        r = client.get(f"/v1/creators/projects/{PROJECT}/video/video.mp4", headers=auth())
+        assert r.status_code == 200 and r.headers["content-type"] == "video/mp4" and r.content.endswith(b"ftyp")
+        assert client.get(f"/v1/creators/projects/{PROJECT}/video/other.exe", headers=auth()).status_code in (400, 404, 422)
+        assert client.post(f"/v1/creators/projects/{PROJECT}/jobs", headers=auth(), json={"kind": "assembly", "version": 1}).status_code == 403
+    assert creators.calls[0][:3] == ("STREAM", f"/projects/{PROJECT}/video/video.mp4", "demo-tenant")

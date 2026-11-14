@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import model
@@ -105,7 +105,8 @@ class ScriptInput(InputModel):
 
 
 class JobInput(InputModel):
-    kind: Literal["script", "voiceover", "scenes", "images", "thumbnail"]
+    kind: Literal["script", "voiceover", "scenes", "images", "thumbnail", "seo", "assembly"]
+    burn_subtitles: bool = False  # assembly: subtitles in the picture as well as the separate captions file
     scenes: list[int] = Field(default_factory=list, max_length=500)  # images: only these scenes (empty: all)
     voice: str = Field(default="", max_length=40, pattern=r"^([a-z]{2}_[a-z]{2,20})?$")
     speed: float = Field(default=1.0, ge=0.6, le=1.6)
@@ -406,6 +407,10 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> Fast
                 return error(400, "invalid_request", "those scenes aren't in this video")
             partial = bool(body.scenes) and project["stages"]["images"]["state"] in model.FINISHED
             params = {"scenes": sorted(set(body.scenes))}
+        if body.kind == "assembly":
+            if any(not (sc.get("image") or {}).get("key") for sc in project["record"].get("scenes") or []):
+                return error(409, "earlier_stage_open", "every scene needs an image first")
+            params = {"burn_subtitles": body.burn_subtitles}
         if project["version"] != body.version:
             raise ProjectError("the project changed since you opened it; reload it first", "stale_version")
         reset = model.start_job(project["stages"], body.kind, partial)
@@ -534,6 +539,22 @@ def create_app(store: Any = None, voices: Any = None, audio: Any = None) -> Fast
                     archive.writestr(f"scene-{s['number']:03d}.png", await app.state.audio.get(s["image"]["key"]))
         return Response(out.getvalue(), media_type="application/zip",
                         headers={"Content-Disposition": f'attachment; filename="{project_id[:8]}-scenes.zip"'})
+
+    @app.get("/v1/creators/projects/{project_id}/video/{name}")
+    async def video(project_id: str, name: str, request: Request):
+        """The finished video ('video.mp4', streamed) or its captions ('captions.srt'), from this project only."""
+        who = caller(request)
+        if isinstance(who, JSONResponse):
+            return who
+        project = await load(who[0], project_id)
+        made = project["record"].get("video") or {}
+        key = {"video.mp4": made.get("key"), "captions.srt": made.get("captions_key")}.get(name)
+        if not key or app.state.audio is None or not key.startswith(f"{who[0]}/creators/{project_id}/"):
+            return error(404, "not_found", "no such file for this project")
+        size, chunks = await app.state.audio.stream(key)
+        filename = f"{(project['title'] or 'video')[:60]}{'.mp4' if name == 'video.mp4' else '.srt'}".replace('"', "")
+        return StreamingResponse(chunks, media_type="video/mp4" if name == "video.mp4" else "application/x-subrip",
+                                 headers={"Content-Length": str(size), "Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.get("/v1/creators/projects/{project_id}/events")
     async def events(project_id: str, request: Request, limit: int = Query(default=100, ge=1, le=500)):

@@ -23,3 +23,10 @@ services:
       resources:
         reservations:
           devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+  creators-render:
+    build: ./creators-render   # on ghana: ~/creators-home/creators-render
+    image: creators-render:1
+    restart: unless-stopped
+    env_file: /home/newwave-dgx/creators-home/secrets.env
+    ports: ["100.88.112.5:8895:8895"]
+    volumes: ["/home/newwave-dgx/creators-home/render-work:/work"]

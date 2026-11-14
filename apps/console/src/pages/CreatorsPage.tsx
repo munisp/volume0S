@@ -13,7 +13,7 @@ const STATE_LABEL: Record<CreatorStage['state'], string> = {
 }
 const EVENT_LABEL: Record<string, string> = {
   created: 'Project created', title_set: 'Title chosen', script_saved: 'Script saved', approved: 'Approved',
-  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made', scenes_saved: 'Scenes planned', images_saved: 'Images made', thumbnails_saved: 'Thumbnails made', thumbnail_chosen: 'Thumbnail chosen', scene_edited: 'Scene edited',
+  reopened: 'Reopened', brief_changed: 'Brief changed', job_started: 'Started', job_failed: 'Failed', voiceover_saved: 'Voiceover made', scenes_saved: 'Scenes planned', images_saved: 'Images made', thumbnails_saved: 'Thumbnails made', thumbnail_chosen: 'Thumbnail chosen', scene_edited: 'Scene edited', seo_saved: 'SEO package written', video_saved: 'Video made',
 }
 
 /** Offer 35 Creators Home: YouTube channels and their video projects, each moving through 12 production stages. */
@@ -166,7 +166,8 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
   const [reason, setReason] = useState('')
   const [events, setEvents] = useState<CreatorEvent[]>([])
   const [jobs, setJobs] = useState<CreatorJob[]>([])
-  const [confirm, setConfirm] = useState<'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | null>(null)
+  const [confirm, setConfirm] = useState<'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly' | null>(null)
+  const [burn, setBurn] = useState(false)
   const [voice, setVoice] = useState(project.record.voiceover?.voice ?? '')
   const [speed, setSpeed] = useState(1)
   const stage = (key: string) => project.stages.find(item => item.key === key)!
@@ -202,9 +203,11 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
   const reopen = (key: string) => act(async () => { const r = await api.creatorStage(project.id, key, 'reopen', reason.trim(), project.version); setReason(''); return r },
     'Reopened. Everything built on it goes back to not started.')
   const JOB_MESSAGE = { script: 'Writing the script. It appears here when it is ready.', voiceover: 'Making the voiceover, chapter by chapter.',
-    scenes: 'Planning the scenes from the narration.', images: 'Making the images, scene by scene.', thumbnail: 'Making three thumbnail options.' }
-  const startJob = (kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail', scenes: number[] = []) => act(async () => {
-    const input = kind === 'voiceover' ? { kind, voice, speed, version: project.version } : kind === 'images' ? { kind, scenes, version: project.version } : { kind, version: project.version }
+    scenes: 'Planning the scenes from the narration.', images: 'Making the images, scene by scene.', thumbnail: 'Making three thumbnail options.',
+    seo: 'Writing the SEO package.', assembly: 'Making the video on ghana.' }
+  const startJob = (kind: 'script' | 'voiceover' | 'scenes' | 'images' | 'thumbnail' | 'seo' | 'assembly', scenes: number[] = []) => act(async () => {
+    const input = kind === 'voiceover' ? { kind, voice, speed, version: project.version } : kind === 'images' ? { kind, scenes, version: project.version }
+      : kind === 'assembly' ? { kind, burn_subtitles: burn, version: project.version } : { kind, version: project.version }
     const r = await api.startCreatorJob(project.id, input)
     setConfirm(null); setJobs(current => [r.job, ...current]); return r.project
   }, JOB_MESSAGE[kind])
@@ -286,7 +289,29 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
     {scriptApproved && <ThumbnailSection project={project} canEdit={canEdit} busy={busy} progress={latest('thumbnail')?.progress || ''} onMake={() => setConfirm('thumbnail')}
       onChoose={n => void act(() => api.chooseCreatorThumbnail(project.id, n, project.version), 'Thumbnail chosen.')} />}
 
-    {stage('images').state === 'done' && <Note>Next: the SEO package and the assembled video. These arrive in the next release of Creators Home.</Note>}
+    {voiceStage.state === 'done' && <SeoSection project={project} canEdit={canEdit} busy={busy} progress={latest('seo')?.progress || ''} onMake={() => setConfirm('seo')} />}
+
+    {stage('images').state === 'done' && <VideoSection project={project} canEdit={canEdit} busy={busy} progress={latest('assembly')?.progress || ''}
+      burn={burn} onBurn={setBurn} onMake={() => setConfirm('assembly')} />}
+
+    {stage('final_review').state !== 'pending' && <div className="stack" aria-label="Final review">
+      <strong>11 · Final review</strong>
+      <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        <li>Title: “{project.title}”</li>
+        <li>Script: {project.record.script?.words.toLocaleString()} words, approved</li>
+        <li>Voice: {project.record.voiceover?.voice} · {Math.round((project.record.voiceover?.total_seconds ?? 0) / 60 * 10) / 10} minutes</li>
+        <li>Images: {(project.record.scenes ?? []).filter(s => s.image).length} of {project.record.scenes?.length ?? 0} scenes</li>
+        <li>Thumbnail: {project.record.thumbnail?.chosen ? `option ${project.record.thumbnail.chosen} “${project.record.thumbnail.options[project.record.thumbnail.chosen - 1]?.caption}”` : 'not chosen yet'}</li>
+        <li>SEO package: {project.record.seo ? `${project.record.seo.tags.length} tags, ${project.record.seo.chapters.length} chapters` : 'not written yet'}</li>
+        <li>Video: {project.record.video ? `${Math.round(project.record.video.seconds / 6) / 10} minutes, 1080p` : '—'}</li>
+      </ul>
+      {stage('final_review').state === 'needs_approval' && canEdit && <div className="row" style={{ gap: 8 }}>
+        <button className="button button-primary" disabled={busy || !project.record.thumbnail?.chosen || !project.record.seo}
+          onClick={() => void approve('final_review', 'Approved. Publishing to YouTube comes next.')}>Approve the final video</button>
+        {(!project.record.thumbnail?.chosen || !project.record.seo) && <span className="small muted">Choose a thumbnail and write the SEO package first.</span>}
+      </div>}
+      {stage('final_review').state === 'approved' && <Note tone="done">Approved. Publishing to your YouTube channel arrives in the next release; until then download the MP4, captions and description above.</Note>}
+    </div>}
 
     <div className="stack" aria-label="History">
       <strong>History</strong>
@@ -307,6 +332,12 @@ function ProjectWorkspace({ project, channel, canEdit, onChange }: { project: Cr
     </Confirm>}
     {confirm === 'images' && <Confirm title={`Make ${project.record.scenes?.length ?? 0} images?`} confirmLabel="Make the images" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('images')}>
       <p>One 16:9 image per scene, in {channel?.name ?? 'the channel'}'s look: about {Math.max(1, Math.round((project.record.scenes?.length ?? 0) * 7 / 60))} minutes on ghana's GPU. Images already made are replaced.</p>
+    </Confirm>}
+    {confirm === 'seo' && <Confirm title="Write the SEO package?" confirmLabel="Write it" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('seo')}>
+      <p>Description, keywords, tags, hashtags, pinned comment, playlist, end screen and cards, from the script itself; chapters from the recorded narration. About a minute.</p>
+    </Confirm>}
+    {confirm === 'assembly' && <Confirm title="Make the video?" confirmLabel="Make the video" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('assembly')}>
+      <p>1080p with a slow zoom or pan on every scene, each on screen for exactly its narration{burn ? ', subtitles in the picture' : ''}, plus a captions file. A few minutes on ghana.</p>
     </Confirm>}
     {confirm === 'thumbnail' && <Confirm title="Make thumbnail options?" confirmLabel="Make thumbnails" busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void startJob('thumbnail')}>
       <p>Three concepts from the title and script: each with a short caption that isn't the title, drawn large on a 1280×720 image. You choose one.</p>
@@ -392,6 +423,69 @@ function ScenesSection({ project, canEdit, busy, running, onPlan, onImages, onRe
         </>}
       </div>)}
     </div>
+  </div>
+}
+
+function Copy({ text, label = 'Copy' }: { text: string; label?: string }) {
+  const { notify } = useSession()
+  return <button className="button button-secondary small" onClick={() => { void navigator.clipboard.writeText(text).then(() => notify('success', 'Copied.'), () => notify('error', "Couldn't copy.")) }}>{label}</button>
+}
+
+function SeoSection({ project, canEdit, busy, progress, onMake }: { project: CreatorProject; canEdit: boolean; busy: boolean; progress: string; onMake: () => void }) {
+  const stage = project.stages.find(s => s.key === 'seo')!
+  const seo = project.record.seo
+  return <div className="stack" aria-label="SEO package">
+    <strong>9 · SEO package</strong>
+    {stage.state === 'failed' && <Note tone="failed">The SEO package couldn't be written: {stage.note}</Note>}
+    {stage.state === 'running' && <Note>Writing the SEO package… {progress || 'queued'}.</Note>}
+    {canEdit && stage.state !== 'running' && <div><button className="button button-primary" disabled={busy} onClick={onMake}><Sparkles size={14} /> {seo ? 'Write it again' : 'Write the SEO package'}</button></div>}
+    {seo && <div className="stack" style={{ gap: 10 }}>
+      <div className="stack" style={{ gap: 4 }}><span className="small"><strong>Description</strong> (with chapters and hashtags) <Copy text={seo.full_description} /></span>
+        <pre className="small" style={{ whiteSpace: 'pre-wrap', margin: 0, padding: 10, background: 'var(--surface-2, #f1f1ee)', borderRadius: 6 }}>{seo.full_description}</pre></div>
+      <span className="small"><strong>Tags</strong> ({seo.tags.join(', ').length} of 500 characters) <Copy text={seo.tags.join(', ')} /><br />{seo.tags.join(', ')}</span>
+      <span className="small"><strong>Hashtags</strong> {seo.hashtags.join(' ')}</span>
+      <span className="small"><strong>Keywords</strong> — primary: {seo.primary_keywords.join(', ')}; secondary: {seo.secondary_keywords.join(', ')}; long-tail: {seo.long_tail_keywords.join(', ')}. <span className="muted">{seo.keyword_note}</span></span>
+      <span className="small"><strong>Pinned comment</strong> {seo.pinned_comment} <Copy text={seo.pinned_comment} /></span>
+      <span className="small"><strong>Playlist</strong> {seo.playlist} · <strong>End screen</strong> {seo.end_screen}</span>
+      {seo.cards.length > 0 && <span className="small"><strong>Cards</strong> {seo.cards.map(c => `${c.at}: ${c.suggest}`).join(' · ')}</span>}
+    </div>}
+  </div>
+}
+
+function VideoSection({ project, canEdit, busy, progress, burn, onBurn, onMake }: {
+  project: CreatorProject; canEdit: boolean; busy: boolean; progress: string; burn: boolean; onBurn: (b: boolean) => void; onMake: () => void
+}) {
+  const { api, notify } = useSession()
+  const stage = project.stages.find(s => s.key === 'assembly')!
+  const video = project.record.video
+  const [url, setUrl] = useState('')
+  const [loading, setLoading] = useState(false)
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
+  async function load() {
+    setLoading(true)
+    try { setUrl(await api.creatorVideo(project.id, 'video.mp4')) } catch (error) { notify('error', errorText(error)) } finally { setLoading(false) }
+  }
+  async function captions() {
+    try { const u = await api.creatorVideo(project.id, 'captions.srt'); const a = document.createElement('a'); a.href = u; a.download = `${project.title || 'captions'}.srt`; a.click(); window.setTimeout(() => URL.revokeObjectURL(u), 10000) }
+    catch (error) { notify('error', errorText(error)) }
+  }
+  return <div className="stack" aria-label="Video">
+    <strong>10 · Video</strong>
+    {stage.state === 'failed' && <Note tone="failed">The video couldn't be made: {stage.note}</Note>}
+    {stage.state === 'running' && <Note>Making the video… {progress || 'queued'}.</Note>}
+    {canEdit && stage.state !== 'running' && <div className="row" style={{ gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <button className="button button-primary" disabled={busy} onClick={onMake}><Clapperboard size={14} /> {video ? 'Make the video again' : 'Make the video'}</button>
+      <label className="small row" style={{ gap: 6, alignItems: 'center' }}><input type="checkbox" checked={burn} onChange={e => onBurn(e.target.checked)} /> Subtitles in the picture (a captions file is always made)</label>
+    </div>}
+    {video && stage.state === 'done' && <div className="stack" style={{ gap: 8 }}>
+      <span className="small muted">{Math.floor(video.seconds / 60)}:{String(Math.round(video.seconds % 60)).padStart(2, '0')} · 1920×1080 · {(video.bytes / 1e6).toFixed(0)} MB{video.burned_subtitles ? ' · subtitles in the picture' : ''} · made <When value={video.made_at} /></span>
+      {url ? <video controls src={url} style={{ width: '100%', maxWidth: 960, borderRadius: 8, background: '#000' }} aria-label="The finished video" />
+        : <div><button className="button button-secondary" disabled={loading} onClick={() => void load()}><Play size={14} /> {loading ? 'Loading the video…' : 'Watch the video'}</button></div>}
+      <div className="row" style={{ gap: 8 }}>
+        {url && <a className="button button-secondary small" href={url} download={`${project.title || 'video'}.mp4`}><Download size={14} /> MP4</a>}
+        <button className="button button-secondary small" onClick={() => void captions()}><Download size={14} /> Captions (.srt)</button>
+      </div>
+    </div>}
   </div>
 }
 

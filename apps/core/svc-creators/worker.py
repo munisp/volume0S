@@ -14,8 +14,9 @@ import os
 from typing import Any
 
 import model
-from providers import (AudioStore, ImageService, OllamaWriter, ProviderError, VoiceService, caption_thumbnail, characters,
-                       chunks_for_speech, image_prompt, join_wavs, scene_visuals, thumbnail_concepts)
+from providers import (AudioStore, ImageService, OllamaWriter, ProviderError, RenderService, VoiceService, caption_thumbnail,
+                       captions, chapter_marks, characters, chunks_for_speech, image_prompt, join_wavs, scene_visuals, seo_package,
+                       thumbnail_concepts, to_jpeg)
 from store import PostgresCreatorStore
 
 log = logging.getLogger("creators-worker")
@@ -47,9 +48,24 @@ def brief(project: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def scene_spans(planned: list[float], target: float, floor: float = 0.2) -> list[float]:
+    """How long each scene of a chapter stays on screen: its planned share of the chapter's recorded length, never
+    under `floor` seconds, and adding up to exactly the recording (picture and voice never drift apart)."""
+    n = len(planned)
+    if target <= floor * n:
+        spans = [target / n] * n
+    else:
+        have = sum(planned) or 1.0
+        spans = [floor + (target - floor * n) * p / have for p in planned]
+    spans = [round(x, 3) for x in spans]
+    longest = max(range(n), key=lambda i: spans[i])
+    spans[longest] = round(spans[longest] + target - sum(spans), 3)
+    return spans
+
+
 class Worker:
-    def __init__(self, store: Any, writer: Any, voices: Any, audio: Any, images: Any = None):
-        self.store, self.writer, self.voices, self.audio, self.images = store, writer, voices, audio, images
+    def __init__(self, store: Any, writer: Any, voices: Any, audio: Any, images: Any = None, renderer: Any = None):
+        self.store, self.writer, self.voices, self.audio, self.images, self.renderer = store, writer, voices, audio, images, renderer
 
     async def save(self, tenant: str, project_id: str, change, event: dict[str, Any]) -> dict[str, Any]:
         """Applies `change` to the latest version of the project; retries if someone saved in between."""
@@ -213,6 +229,74 @@ class Worker:
         await self.save(tenant, pid, apply, {"kind": "thumbnails_saved", "stage": "thumbnail", "detail": {"options": len(options)}})
         return f"{len(options)} thumbnails"
 
+    async def run_seo(self, job: dict[str, Any]) -> str:
+        tenant, pid = job["tenant_id"], job["project_id"]
+        project = await self.store.project(tenant, pid)
+        channel = await self.store.channel(tenant, project["channel_id"]) or {}
+        script, voice = project["record"].get("script") or {}, project["record"].get("voiceover") or {}
+        await self.progress(job, "writing the description, keywords and tags")
+        package = await seo_package(self.writer, system_prompt(channel), project["title"], script.get("text", ""),
+                                    chapter_marks(script.get("sections", []), voice.get("sections", [])))
+        package["made_at"] = model.now()
+
+        def apply(p: dict[str, Any]) -> None:
+            if p["stages"]["seo"]["state"] != "running":
+                raise ProviderError("the SEO stage was changed meanwhile; result discarded")
+            p["record"]["seo"] = package
+            model.finish_job(p["stages"], "seo", True, f"{len(package['tags'])} tags, {len(package['chapters'])} chapters")
+        await self.save(tenant, pid, apply, {"kind": "seo_saved", "stage": "seo", "detail": {"tags": len(package["tags"])}})
+        return f"{len(package['tags'])} tags"
+
+    async def run_assembly(self, job: dict[str, Any]) -> str:
+        """The finished video: every scene image on screen for exactly its narration, over the recorded chapters."""
+        if self.renderer is None:
+            raise ProviderError("the render service isn't set up")
+        import tempfile
+        tenant, pid = job["tenant_id"], job["project_id"]
+        project = await self.store.project(tenant, pid)
+        scenes, voice = project["record"].get("scenes") or [], project["record"].get("voiceover") or {}
+        if not scenes or any(not (s.get("image") or {}).get("key") for s in scenes):
+            raise ProviderError("every scene needs an image first")
+        await self.progress(job, f"gathering {len(scenes)} images and the narration")
+        files: dict[str, bytes] = {}
+        chapter_seconds = {v["index"]: v["seconds"] for v in voice.get("sections", [])}
+        timed = []
+        for chapter, items in __import__("itertools").groupby(scenes, key=lambda s: s["chapter"]):
+            items = list(items)
+            target, have = chapter_seconds.get(chapter, sum(s["seconds"] for s in items)), sum(s["seconds"] for s in items) or 1
+            spans = scene_spans([s["seconds"] for s in items], target)
+            for scene, span in zip(items, spans):
+                name = f"scene-{scene['number']:03d}.jpg"
+                files[name] = to_jpeg(await self.audio.get(scene["image"]["key"]))
+                timed.append({"image": name, "seconds": span, "narration": scene["narration"]})
+        chapters = []
+        for section in voice.get("sections", []):
+            name = f"chapter-{section['index']:02d}.wav"
+            files[name] = await self.audio.get(section["key"]); chapters.append(name)
+        burn = bool(job["params"].get("burn_subtitles"))
+        await self.progress(job, f"rendering {round(sum(t['seconds'] for t in timed) / 60, 1)} minutes of 1080p video on ghana")
+        with tempfile.NamedTemporaryFile(suffix=".mp4", dir="/tmp") as out:
+            took = await self.renderer.render({"scenes": timed, "chapters": chapters, "burn_subtitles": burn}, files, out.name)
+            size = os.path.getsize(out.name)
+            if size < 10_000:
+                raise ProviderError("the render service returned an empty video")
+            stamp = hashlib.sha256(f"{pid}:{model.now()}".encode()).hexdigest()[:10]
+            key = self.audio.key(tenant, pid, f"video/{stamp}/video.mp4")
+            await self.progress(job, "storing the video")
+            await self.audio.put_file(key, out.name, "video/mp4")
+        srt_key = self.audio.key(tenant, pid, f"video/{stamp}/captions.srt")
+        await self.audio.put(srt_key, captions(timed).encode(), "application/x-subrip")
+        record = {"key": key, "captions_key": srt_key, "bytes": size, "seconds": round(sum(t["seconds"] for t in timed), 1),
+                  "width": 1920, "height": 1080, "fps": 30, "burned_subtitles": burn, "render_seconds": took, "made_at": model.now()}
+
+        def apply(p: dict[str, Any]) -> None:
+            if p["stages"]["assembly"]["state"] != "running":
+                raise ProviderError("the assembly stage was changed meanwhile; result discarded")
+            p["record"]["video"] = record
+            model.finish_job(p["stages"], "assembly", True, f"{round(record['seconds'] / 60, 1)} minutes, 1080p")
+        await self.save(tenant, pid, apply, {"kind": "video_saved", "stage": "assembly", "detail": {"seconds": record["seconds"], "bytes": size}})
+        return f"{round(record['seconds'] / 60, 1)} min video"
+
     async def fail(self, job: dict[str, Any], reason: str) -> None:
         def apply(p: dict[str, Any]) -> None:
             if p["stages"][model.JOB_STAGE[job["kind"]]]["state"] == "running":
@@ -232,7 +316,8 @@ class Worker:
         log.info("job %s %s for %s/%s (attempt %s)", job["id"], job["kind"], job["tenant_id"], job["project_id"], job["attempts"])
         try:
             runner = {"script": self.run_script, "voiceover": self.run_voiceover, "scenes": self.run_scenes,
-                      "images": self.run_images, "thumbnail": self.run_thumbnail}[job["kind"]]
+                      "images": self.run_images, "thumbnail": self.run_thumbnail, "seo": self.run_seo,
+                      "assembly": self.run_assembly}[job["kind"]]
             done = await runner(job)
             await self.store.finish_job(job["tenant_id"], job["id"], True)
             log.info("job %s done: %s", job["id"], done)
@@ -250,7 +335,7 @@ async def main() -> None:
     voices, audio = VoiceService.from_env(), AudioStore.from_env()
     if voices is None or audio is None:
         raise SystemExit("TTS_URL, CREATORS_TTS_TOKEN and ASSET_BUCKET are required")
-    worker = Worker(store, OllamaWriter.from_env(), voices, audio, ImageService.from_env())
+    worker = Worker(store, OllamaWriter.from_env(), voices, audio, ImageService.from_env(), RenderService.from_env())
     log.info("creators-worker ready (script model %s)", worker.writer.model)
     while True:
         if not await worker.once():
